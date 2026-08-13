@@ -16,7 +16,8 @@ const createFavourite = async (user: any, payload: Favourites): Promise<Favourit
     //check already have or not
     const isFavourite = await prisma.favourites.findFirst({
         where: {
-            doctorId: payload.doctorId
+            doctorId: payload.doctorId,
+            patientId: isUserExist.id
         }
     });
 
@@ -43,7 +44,8 @@ const removeFavourite = async (user: any, payload: Favourites): Promise<Favourit
     //check already have or not
     const isFavourite = await prisma.favourites.findFirst({
         where: {
-            doctorId: payload.doctorId
+            doctorId: payload.doctorId,
+            patientId: isUserExist.id
         }
     });
     if(!isFavourite){

@@ -8,6 +8,13 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// NOTE (Pass 2): Auth.userId is an intentional polymorphic reference — it points to
+// either Patient.id or Doctor.id depending on `role`, and is null for admins. It is not
+// converted to a real foreign key in this pass: doing so would change the JWT payload
+// shape (`userId` is embedded directly in issued tokens) and cascade into every
+// authenticated request across both the API and frontend. That is authentication/session
+// surface, not database-integrity surface, and is deferred to Pass 3/4 as a deliberate
+// decision rather than an oversight. See docs/passes/02-database-integrity.md.
 model Auth {
   id       String   @id @default(uuid())
   email    String   @unique
@@ -59,6 +66,9 @@ model Patient {
   img          String?
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
+  /// Soft-delete scaffold (Pass 2). Not yet wired into service code — hard `delete()`
+  /// calls remain until Pass 12 (Patient Data & Medical Records) owns the cutover.
+  deletedAt    DateTime?
   appointments Appointments[]
   Reviews      Reviews[]
   Prescription Prescription[]
@@ -103,6 +113,9 @@ model Doctor {
   verified               Boolean?         @default(false)
   createdAt              DateTime         @default(now())
   updatedAt              DateTime         @updatedAt
+  /// Soft-delete scaffold (Pass 2). Not yet wired into service code — hard `delete()`
+  /// calls remain until Pass 10 (Doctor Lifecycle) owns the cutover.
+  deletedAt              DateTime?
   appointments           Appointments[]
   prescription           Prescription[]
   favourites             Favourites[]
@@ -115,10 +128,17 @@ model Doctor {
 
 model Appointments {
   id        String   @id @default(uuid())
+  // Intentionally optional: guest/unauthenticated bookings have no linked Patient row
+  // (see appointment.service.ts: createAppointmentByUnAuthenticateUser). This is
+  // legitimate design, not a gap.
   patientId String?
-  patient   Patient? @relation(fields: [patientId], references: [id])
-  doctorId  String?
-  doctor    Doctor?  @relation(fields: [doctorId], references: [id])
+  patient   Patient? @relation(fields: [patientId], references: [id], onDelete: SetNull)
+  // Was optional prior to Pass 2. Every code path that creates an appointment already
+  // resolves a real doctor (falling back to config.defaultAdminDoctor for guest
+  // bookings), so the column is made required to match actual behavior and close Gap G2
+  // from docs/passes/01-domain-state-model.md.
+  doctorId  String
+  doctor    Doctor   @relation(fields: [doctorId], references: [id], onDelete: Restrict)
 
   trackingId         String?             @unique
   firstName          String?
@@ -138,16 +158,24 @@ model Appointments {
 
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
+  /// Soft-delete scaffold (Pass 2). Appointments are historical/financial records and
+  /// should never be hard-deleted going forward; wiring is Pass 8's job.
+  deletedAt    DateTime?
   prescription Prescription[]
   payment      Payment[]
 
+  // Availability/lookup queries filter by doctor + date very frequently (booking flow,
+  // doctor dashboard, admin dashboard) — this was previously an unindexed table scan.
+  @@index([doctorId, scheduleDate])
+  // Admin/doctor dashboards filter and count by status.
+  @@index([status])
   @@map("Appointments")
 }
 
 model Payment {
   id            String       @id @default(uuid())
   appointmentId String
-  appointment   Appointments @relation(fields: [appointmentId], references: [id])
+  appointment   Appointments @relation(fields: [appointmentId], references: [id], onDelete: Restrict)
   paymentMethod String
   paymentType   String
 
@@ -156,6 +184,15 @@ model Payment {
   vat         Int?
   totalAmount Int
 
+  // Payment records had no timestamps at all prior to Pass 2 — no way to tell when a
+  // payment was recorded or last touched. Added for audit-trail purposes; full financial
+  // lifecycle (status, immutability enforcement) is Pass 7/14's job.
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  /// Soft-delete scaffold (Pass 2). Financial records must never be hard-deleted; wiring
+  /// is Pass 14's job.
+  deletedAt DateTime?
+
   @@map("Payment")
 }
 
@@ -163,10 +200,18 @@ model Reviews {
   id String @id @default(uuid())
 
   doctorId String
-  doctor   Doctor? @relation(fields: [doctorId], references: [id])
+  doctor   Doctor? @relation(fields: [doctorId], references: [id], onDelete: Restrict)
 
   patientId String
-  patient   Patient @relation(fields: [patientId], references: [id])
+  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Restrict)
+
+  // Nullable: links a review back to the visit that justifies it (closes Gap G3 from
+  // docs/passes/01-domain-state-model.md). Optional because existing reviews predate this
+  // column and cannot be backfilled automatically; new reviews should populate it going
+  // forward — enforcing that at the application layer is Pass 21's job (review
+  // moderation), not this pass.
+  appointmentId String?
+  appointment   Appointments? @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
 
   description   String?
   star          String?
@@ -183,13 +228,13 @@ model Prescription {
   id String @id @default(uuid())
 
   doctorId String
-  doctor   Doctor @relation(fields: [doctorId], references: [id])
+  doctor   Doctor @relation(fields: [doctorId], references: [id], onDelete: Restrict)
 
   patientId String
-  patient   Patient @relation(fields: [patientId], references: [id])
+  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Restrict)
 
   appointmentId String
-  appointment   Appointments @relation(fields: [appointmentId], references: [id])
+  appointment   Appointments @relation(fields: [appointmentId], references: [id], onDelete: Restrict)
 
   followUpdate String?
   instruction  String?
@@ -204,6 +249,9 @@ model Prescription {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  /// Soft-delete scaffold (Pass 2). Prescriptions are medical/legal records and should
+  /// never be hard-deleted going forward; wiring is Pass 13's job.
+  deletedAt DateTime?
 
   @@map("Prescription")
 }
@@ -211,7 +259,7 @@ model Prescription {
 model Medicine {
   id             String       @id @default(uuid())
   prescriptionId String
-  prescription   Prescription @relation(fields: [prescriptionId], references: [id])
+  prescription   Prescription @relation(fields: [prescriptionId], references: [id], onDelete: Cascade)
 
   medicine  String?
   dosage    String?
@@ -225,12 +273,22 @@ model Medicine {
 }
 
 model Favourites {
-  id        String   @id @default(uuid())
-  doctorId  String   @unique
-  doctor    Doctor   @relation(fields: [doctorId], references: [id])
-  patient   Patient? @relation(fields: [patientId], references: [id])
-  patientId String?
+  id String @id @default(uuid())
 
+  // Previously `doctorId String @unique`, which meant only ONE favourite row could exist
+  // per doctor system-wide — the first patient to favourite a doctor silently blocked
+  // every other patient from ever favouriting that same doctor (Gap G4 from
+  // docs/passes/01-domain-state-model.md; confirmed live in favourites.service.ts, whose
+  // "already favourited" check queries by doctorId alone). Replaced with a composite
+  // unique constraint expressing the actual intended rule: a given patient can favourite
+  // a given doctor at most once, and many patients can favourite the same doctor.
+  // patientId is also made required — a favourite with no owning patient is meaningless.
+  doctorId  String
+  doctor    Doctor  @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  patientId String
+  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@unique([patientId, doctorId])
   @@map("Favourites")
 }
 
@@ -238,7 +296,7 @@ model DoctorTimeSlot {
   id String @id @default(uuid())
 
   doctorId       String
-  doctor         Doctor        @relation(fields: [doctorId], references: [id])
+  doctor         Doctor        @relation(fields: [doctorId], references: [id], onDelete: Cascade)
   day            Day?
   timeSlot       ScheduleDay[]
   weekDay        String?
@@ -253,7 +311,7 @@ model ScheduleDay {
   id               Int             @id @default(autoincrement())
   startTime        String
   endTime          String
-  doctorTimeSlot   DoctorTimeSlot? @relation(fields: [doctorTimeSlotId], references: [id])
+  doctorTimeSlot   DoctorTimeSlot? @relation(fields: [doctorTimeSlotId], references: [id], onDelete: Cascade)
   doctorTimeSlotId String?
 }
 
@@ -263,9 +321,45 @@ model Blogs {
   description String
   img         String?
   userId      String
-  user        Doctor   @relation(fields: [userId], references: [id])
+  user        Doctor   @relation(fields: [userId], references: [id], onDelete: Restrict)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+}
+
+// --- Pass 2 scaffolding tables -----------------------------------------------------
+// These two tables are added now because Pass 2's own scope explicitly calls for
+// "Idempotency records" and "Audit records" as database-integrity concerns. Neither is
+// wired into application code in this pass — no service currently reads or writes them.
+// IdempotencyKey is consumed starting in Pass 20 (Concurrency & Idempotency).
+// AuditLog is consumed starting in Pass 22 (Audit & Observability).
+// Defining the shape now (rather than later) means every intermediate pass that touches
+// mutating endpoints can be written idempotency/audit-aware from the start instead of
+// being retrofitted.
+
+model IdempotencyKey {
+  /// Client-supplied idempotency key (e.g. an `Idempotency-Key` request header).
+  key         String   @id
+  /// Cached response body, replayed verbatim if the same key is seen again.
+  response    Json?
+  statusCode  Int?
+  createdAt   DateTime @default(now())
+
+  @@map("IdempotencyKey")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  actorId    String?
+  actorRole  String?
+  action     String
+  entityType String
+  entityId   String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([actorId])
+  @@map("AuditLog")
 }
 
 enum UserRole {

@@ -6,7 +6,7 @@ at a time, in order. Each pass is committed and pushed on completion.
 | # | Pass | Status |
 |---|---|---|
 | 1 | Domain & State Model | ✅ Complete |
-| 2 | Database Integrity | ⏳ Not started |
+| 2 | Database Integrity | ✅ Complete |
 | 3 | Authentication | ⏳ Not started |
 | 4 | Authorization & RBAC | ⏳ Not started |
 | 5 | Appointment & Slot Engine | ⏳ Not started |
