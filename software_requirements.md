@@ -82,6 +82,8 @@ If you skip Cloudinary/Gmail setup, the app will still run, but image uploads an
 | `ADMIN_EMAIL`, `GMAIL_APP_EMAIL` | Sender/admin addresses used for outgoing mail |
 | `BACKEND_LOCAL_URL` | Local API base + `/api/v1/auth/` (used in email links during dev) |
 | `BACKEND_LIVE_URL` | Production API base + `/api/v1/auth/` (used in email links in production) |
+| `CLIENT_URL` | Production frontend base URL — used to build password-reset links. **Found undocumented prior to Pass 3**; without it, reset-password emails contain a broken `undefined/reset-password/...` link. |
+| `CLIENT__LOCAL_URL` | Local frontend base URL (double underscore is intentional — matches the actual env var name read in `config/index.ts`), used the same way in development |
 
 ---
 

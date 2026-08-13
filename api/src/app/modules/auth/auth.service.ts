@@ -15,15 +15,28 @@ type ILginResponse = {
     user: {}
 }
 
+// Pass 3: brute-force protection. Rate limiting (IP-based, see auth.route.ts) catches
+// distributed/scripted attempts; this catches slow, targeted attempts against one
+// account regardless of source IP.
+const MAX_FAILED_LOGIN_ATTEMPTS = 5;
+const ACCOUNT_LOCK_MINUTES = 15;
+
 const loginUser = async (user: any): Promise<ILginResponse> => {
     const { email: IEmail, password } = user;
+    const email = typeof IEmail === 'string' ? IEmail.trim().toLowerCase() : IEmail;
     const isUserExist = await prisma.auth.findUnique({
-        where: { email: IEmail }
+        where: { email }
     })
 
     if (!isUserExist) {
         throw new ApiError(httpStatus.NOT_FOUND, "User is not Exist !");
     }
+
+    if (isUserExist.lockedUntil && moment(isUserExist.lockedUntil).isAfter(moment())) {
+        const minutesLeft = Math.ceil(moment(isUserExist.lockedUntil).diff(moment(), 'seconds') / 60);
+        throw new ApiError(httpStatus.FORBIDDEN, `Account temporarily locked due to repeated failed login attempts. Try again in ${minutesLeft} minute(s).`);
+    }
+
     // check Verified doctor or not
     if (isUserExist.role === 'doctor') {
         const getDoctorInfo = await prisma.doctor.findUnique({
@@ -38,24 +51,45 @@ const loginUser = async (user: any): Promise<ILginResponse> => {
     const isPasswordMatched = await bcrypt.compare(password, isUserExist.password);
 
     if (!isPasswordMatched) {
+        const attempts = (isUserExist.failedLoginAttempts ?? 0) + 1;
+        const shouldLock = attempts >= MAX_FAILED_LOGIN_ATTEMPTS;
+        await prisma.auth.update({
+            where: { id: isUserExist.id },
+            data: {
+                failedLoginAttempts: shouldLock ? 0 : attempts,
+                lockedUntil: shouldLock ? moment().add(ACCOUNT_LOCK_MINUTES, 'minutes').toDate() : null
+            }
+        });
+        if (shouldLock) {
+            throw new ApiError(httpStatus.FORBIDDEN, `Too many failed login attempts. Account locked for ${ACCOUNT_LOCK_MINUTES} minutes.`);
+        }
         throw new ApiError(httpStatus.NOT_FOUND, "Password is not Matched !");
     }
-    const { role, userId, isDemo, email } = isUserExist;
+
+    if (isUserExist.failedLoginAttempts) {
+        await prisma.auth.update({
+            where: { id: isUserExist.id },
+            data: { failedLoginAttempts: 0, lockedUntil: null }
+        });
+    }
+
+    const { role, userId, isDemo, email: userEmail } = isUserExist;
     const accessToken = JwtHelper.createToken(
-        { role, userId, email, isDemo: role === 'admin' ? Boolean(isDemo) : false },
+        { role, userId, email: userEmail, isDemo: role === 'admin' ? Boolean(isDemo) : false },
         config.jwt.secret as Secret,
         config.jwt.JWT_EXPIRES_IN as string
     )
     return {
         accessToken,
-        user: { role, userId, email, isDemo: role === 'admin' ? Boolean(isDemo) : false },
+        user: { role, userId, email: userEmail, isDemo: role === 'admin' ? Boolean(isDemo) : false },
     }
 }
 
 const VerificationUser = async (user: any): Promise<ILginResponse> => {
     const { email: IEmail, password } = user;
+    const email = typeof IEmail === 'string' ? IEmail.trim().toLowerCase() : IEmail;
     const isUserExist = await prisma.auth.findUnique({
-        where: { email: IEmail }
+        where: { email }
     })
 
     if (!isUserExist) {
@@ -66,22 +100,23 @@ const VerificationUser = async (user: any): Promise<ILginResponse> => {
     if (!isPasswordMatched) {
         throw new ApiError(httpStatus.NOT_FOUND, "Password is not Matched !");
     }
-    const { role, userId, isDemo, email } = isUserExist;
+    const { role, userId, isDemo, email: userEmail } = isUserExist;
     const accessToken = JwtHelper.createToken(
-        { role, userId, email, isDemo: role === 'admin' ? Boolean(isDemo) : false },
+        { role, userId, email: userEmail, isDemo: role === 'admin' ? Boolean(isDemo) : false },
         config.jwt.secret as Secret,
         config.jwt.JWT_EXPIRES_IN as string
     )
     return {
         accessToken,
-        user: { role, userId, email, isDemo: role === 'admin' ? Boolean(isDemo) : false },
+        user: { role, userId, email: userEmail, isDemo: role === 'admin' ? Boolean(isDemo) : false },
     }
 }
 
 const resetPassword = async (payload: any): Promise<{ message: string }> => {
-    const { email } = payload;
+    const { email: IEmail } = payload;
+    const email = typeof IEmail === 'string' ? IEmail.trim().toLowerCase() : IEmail;
     const isUserExist = await prisma.auth.findUnique({
-        where: { email: email }
+        where: { email }
     })
     if (!isUserExist) {
         throw new ApiError(httpStatus.NOT_FOUND, "User is not Exist !");
@@ -96,15 +131,14 @@ const resetPassword = async (payload: any): Promise<{ message: string }> => {
     const expiresTime = moment(currentTime).add(4, 'hours');
 
     await prisma.$transaction(async (tx) => {
-        //Check if the forgotPassword record exists before attempting reset
-        const existingForgotPassword = await tx.forgotPassword.findUnique({
-            where: { id: isUserExist.id }
+        // BUG FIX (Pass 3): this previously looked up an existing request by
+        // `id: isUserExist.id` — but ForgotPassword rows get their own auto-generated
+        // `id`, never `isUserExist.id`, so this never matched anything and every reset
+        // request silently left the previous one active. Corrected to look up (and clear
+        // all of, in case more than one is stale) by the actual `userId` column.
+        await tx.forgotPassword.deleteMany({
+            where: { userId: isUserExist.id }
         });
-        if (existingForgotPassword) {
-            await tx.forgotPassword.delete({
-                where: { id: isUserExist.id }
-            })
-        }
 
         const forgotPassword = await tx.forgotPassword.create({
             data: {
@@ -180,9 +214,44 @@ const PassworResetConfirm = async (payload: any): Promise<any> => {
     }
 }
 
+// Pass 3: "Credential-change behavior" — previously there was no way for a logged-in
+// user to change their own password; only the unauthenticated forgot-password flow
+// existed. Requires the current password, unlike the reset flow (which exists precisely
+// for when the user *can't* provide their current password).
+const changePassword = async (reqUser: any, payload: any): Promise<{ message: string }> => {
+    const userId = reqUser?.userId;
+    if (!userId) {
+        throw new ApiError(httpStatus.UNAUTHORIZED, "Not authenticated !!");
+    }
+    const { currentPassword, newPassword } = payload;
+    if (!currentPassword || !newPassword) {
+        throw new ApiError(httpStatus.BAD_REQUEST, "currentPassword and newPassword are required !");
+    }
+    const isUserExist = await prisma.auth.findUnique({
+        where: { id: userId }
+    });
+    if (!isUserExist) {
+        throw new ApiError(httpStatus.NOT_FOUND, "User is not Exist !");
+    }
+    const isPasswordMatched = await bcrypt.compare(currentPassword, isUserExist.password);
+    if (!isPasswordMatched) {
+        throw new ApiError(httpStatus.FORBIDDEN, "Current password is incorrect !");
+    }
+    await prisma.auth.update({
+        where: { id: userId },
+        data: {
+            password: await bcrypt.hashSync(newPassword, 12)
+        }
+    });
+    return {
+        message: "Password Changed Successfully !!"
+    }
+}
+
 export const AuthService = {
     loginUser,
     VerificationUser,
     resetPassword,
-    PassworResetConfirm
+    PassworResetConfirm,
+    changePassword
 }

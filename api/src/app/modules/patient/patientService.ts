@@ -6,6 +6,13 @@ import bcrypt from 'bcrypt';
 
 export const create = async (payload: any): Promise<any> => {
     try {
+        // Pass 3: normalize email casing so "User@x.com" and "user@x.com" can't become
+        // two different accounts — Postgres unique constraints are case-sensitive by
+        // default, so without this, both the duplicate-email check and the unique
+        // constraint itself would treat them as distinct.
+        if (typeof payload.email === 'string') {
+            payload.email = payload.email.trim().toLowerCase();
+        }
         const data = await prisma.$transaction(async (tx) => {
             const { password, ...othersData } = payload;
 

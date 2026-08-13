@@ -7,7 +7,7 @@ at a time, in order. Each pass is committed and pushed on completion.
 |---|---|---|
 | 1 | Domain & State Model | ✅ Complete |
 | 2 | Database Integrity | ✅ Complete |
-| 3 | Authentication | ⏳ Not started |
+| 3 | Authentication | ✅ Complete |
 | 4 | Authorization & RBAC | ⏳ Not started |
 | 5 | Appointment & Slot Engine | ⏳ Not started |
 | 6 | Booking Transaction | ⏳ Not started |

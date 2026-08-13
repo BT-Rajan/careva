@@ -24,6 +24,12 @@ model Auth {
   /// When true (admin only): JWT marks user as demo; API blocks mutating requests (read-only).
   isDemo   Boolean  @default(false)
 
+  /// Pass 3 — brute-force protection. Incremented on each failed login, reset on success.
+  failedLoginAttempts Int       @default(0)
+  /// Pass 3 — set when failedLoginAttempts crosses the threshold; login is refused while
+  /// this is in the future, regardless of whether the password given is correct.
+  lockedUntil         DateTime?
+
   @@map("Auth")
 }
 

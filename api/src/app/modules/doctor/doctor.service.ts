@@ -43,6 +43,10 @@ const sendVerificationEmail = async (data: Doctor) => {
 }
 
 const create = async (payload: any): Promise<any> => {
+    // Pass 3: normalize email casing (see identical reasoning in patientService.ts).
+    if (typeof payload.email === 'string') {
+        payload.email = payload.email.trim().toLowerCase();
+    }
     const data = await prisma.$transaction(async (tx) => {
         const { password, ...othersData } = payload;
         const existEmail = await tx.auth.findUnique({ where: { email: othersData.email } });
