@@ -9,8 +9,7 @@ const path_1 = __importDefault(require("path"));
 dotenv_1.default.config({ path: path_1.default.join(process.cwd(), '.env') });
 const clientUrl = process.env.NODE_ENV === "development" ? process.env.CLIENT__LOCAL_URL : process.env.CLIENT_URL;
 const showErrorDetails = process.env.NODE_ENV !== 'production' ||
-    process.env.SHOW_ERROR_DETAILS === 'true' ||
-    process.env.VERCEL_ENV === 'preview';
+    process.env.SHOW_ERROR_DETAILS === 'true';
 exports.default = {
     env: process.env.NODE_ENV,
     showErrorDetails,

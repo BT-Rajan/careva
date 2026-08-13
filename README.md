@@ -66,6 +66,8 @@ careva/                      ← React app (run from here with npm start)
 │   └── prisma/
 │       └── schema.prisma    ← Database models
 ├── .env                     ← Frontend: API URL (see below)
+├── software_requirements.md ← Full list of required software & accounts
+├── DEPLOYMENT.md            ← Step-by-step deploy guide (Windows & Linux)
 └── project_setup.txt        ← Short checklist (Supabase details are in this README)
 ```
 

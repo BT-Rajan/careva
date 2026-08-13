@@ -7,8 +7,7 @@ const clientUrl = process.env.NODE_ENV==="development" ? process.env.CLIENT__LOC
 
 const showErrorDetails =
     process.env.NODE_ENV !== 'production' ||
-    process.env.SHOW_ERROR_DETAILS === 'true' ||
-    process.env.VERCEL_ENV === 'preview';
+    process.env.SHOW_ERROR_DETAILS === 'true';
 
 export default {
     env: process.env.NODE_ENV,
