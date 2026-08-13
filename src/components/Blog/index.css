@@ -1,0 +1,18 @@
+.blog-title{
+    color: #4c1d95;
+    font-weight: 600;
+}
+.categories-title h6, .categories-title .icon{
+    color: #4c1d95;
+}
+.categories-title{
+    color: #6d28d9;
+    cursor: pointer;
+    transition: 0.6s ease-in;
+}
+.categories-title:hover > h6{
+    color: #7054F2;
+}
+.categories-title:hover > .icon{
+    color: #7054F2;
+}
