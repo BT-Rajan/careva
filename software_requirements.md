@@ -2,7 +2,7 @@
 
 This document lists everything needed to **run, build, and deploy** Careva (frontend + API) on a local machine or a server. It does not cover *how* to deploy — see `DEPLOYMENT.md` for step-by-step instructions on Windows and Linux.
 
-Careva no longer targets Vercel. Deployment is host-agnostic: any machine or VM that can run Node.js and PostgreSQL works (bare metal, a VPS, or Docker).
+Careva no longer targets Vercel or Docker. Deployment is native Node.js on the host machine — any machine or VM that can run Node.js and PostgreSQL works (bare metal, a VPS, or a plain server).
 
 ---
 
@@ -28,13 +28,6 @@ Careva no longer targets Vercel. Deployment is host-agnostic: any machine or VM 
 | **Git** | 2.x+ | To clone and manage the repository. |
 | **PostgreSQL** | 14+ (Prisma supports 13–17) | Can be local, a VM-hosted instance, or a managed provider (Railway, Neon, RDS, self-hosted, etc.) |
 | **Prisma CLI** | Installed automatically via `npx prisma` — no separate global install required | Used for schema push/migrations and client generation. |
-
-### Optional (only if using Docker-based deployment)
-
-| Software | Version |
-|----------|---------|
-| **Docker** | 24.x+ |
-| **Docker Compose** | v2 (bundled with modern Docker Desktop / `docker compose` CLI) |
 
 ---
 
@@ -107,6 +100,5 @@ Before deploying, make sure you have:
 - [ ] A Cloudinary account and API credentials
 - [ ] A Gmail account with an App Password generated
 - [ ] Git installed and the repository cloned
-- [ ] (Optional) Docker + Docker Compose if deploying via containers
 
 See `DEPLOYMENT.md` for the exact commands on Windows and Linux.

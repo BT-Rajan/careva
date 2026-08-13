@@ -1,13 +1,8 @@
 # Careva — Deployment Guide (Windows & Linux)
 
-This guide covers deploying Careva **without Vercel** — as a plain Node.js API plus a static/served React frontend, on either Windows or Linux. See `software_requirements.md` first for the full list of required software and accounts.
+This guide covers deploying Careva **without Vercel and without Docker** — as a plain Node.js API plus a static/served React frontend, on either Windows or Linux. See `software_requirements.md` first for the full list of required software and accounts.
 
-Two paths are covered:
-
-- **A. Native deployment** — install Node.js directly on the machine (Windows or Linux)
-- **B. Docker deployment** — use the `Dockerfile`s and `docker-compose.yml` already in the repo (works the same on both OSes)
-
-Pick whichever fits your environment. Both assume you already have:
+Both Windows and Linux native deployment are covered below. Pick the section for your OS. Both assume you already have:
 - A PostgreSQL database and its connection string
 - A Cloudinary account and API credentials
 - A Gmail account with an App Password
@@ -27,9 +22,9 @@ You'll be configuring two `.env` files:
 
 ---
 
-## A. Native deployment
+## 1. Deployment steps
 
-### A1. Windows
+### 1.1 Windows
 
 **1. Install Node.js**
 
@@ -100,7 +95,7 @@ serve -s build -l 3000
 
 Open `http://localhost:3000` (or your server's IP/domain on port 3000).
 
-### A2. Linux
+### 1.2 Linux
 
 **1. Install Node.js 20**
 
@@ -175,7 +170,7 @@ serve -s build -l 3000
 
 Or copy `build/` into an Nginx web root and serve it directly (recommended for production — see **A3**).
 
-### A3. Running as a persistent service (recommended for real deployments)
+### 1.3 Running as a persistent service (recommended for real deployments)
 
 Manually running `npm run compile` / `serve` in a terminal will die when the terminal closes. For a real server, use one of these:
 
@@ -243,56 +238,7 @@ Use [NSSM](https://nssm.cc/) to wrap `node dist/server.js` (API) and `serve -s b
 
 ---
 
-## B. Docker deployment (Windows or Linux)
-
-The repo already includes a `Dockerfile` for the frontend, one for the API (`api/Dockerfile`), and a `docker-compose.yml` that builds both.
-
-**1. Install Docker**
-
-- Windows: install [Docker Desktop](https://www.docker.com/products/docker-desktop/) (includes Compose).
-- Linux: install [Docker Engine](https://docs.docker.com/engine/install/) and the Compose plugin.
-
-**2. Set up environment files**
-
-```bash
-cd careva
-cp api/.env.example api/.env
-# edit api/.env with your DB, Cloudinary, and Gmail credentials
-```
-
-Also create/edit the root `.env` for the frontend build (`REACT_APP_API_BASE_URL_LOCAL` / `_LIVE`).
-
-**3. Build and run**
-
-```bash
-docker compose up --build
-```
-
-This starts:
-- `backend` on port `5050`
-- `frontend` on port `3000`
-
-Your PostgreSQL database is **not** included in `docker-compose.yml** — point `DATABASE_URL` in `api/.env` at your existing Postgres instance (local, managed, or a separate container you run yourself).
-
-**4. Run in the background**
-
-```bash
-docker compose up --build -d
-docker compose logs -f     # view logs
-docker compose down        # stop everything
-```
-
-**5. Apply the database schema**
-
-Run this once against your database (from your host machine, with the same `DATABASE_URL` set, or by exec-ing into the backend container):
-
-```bash
-docker compose exec backend npx prisma db push
-```
-
----
-
-## 6. Post-deployment checklist
+## 2. Post-deployment checklist
 
 - [ ] Visit the frontend URL and confirm the homepage loads
 - [ ] Sign up as a patient and confirm the verification/notification emails arrive
