@@ -35,7 +35,7 @@ const getMyTimeSlot = catchAsync(async (req: Request, res: Response) => {
 })
 
 const getTimeSlot = catchAsync(async (req: Request, res: Response) => {
-    const result = await TimeSlotService.getTimeSlot(req.params.id);
+    const result = await TimeSlotService.getTimeSlot(req.user, req.params.id);
     sendResponse<DoctorTimeSlot>(res, {
         statusCode: 200,
         message: 'Successfully get Time Slot !!',
@@ -54,7 +54,7 @@ const updateTimeSlot = catchAsync(async (req: Request, res: Response) => {
 })
 
 const deleteTimeSlot = catchAsync(async (req: Request, res: Response) => {
-    const result = await TimeSlotService.deleteTimeSlot(req.params.id);
+    const result = await TimeSlotService.deleteTimeSlot(req.user, req.params.id);
     sendResponse<DoctorTimeSlot>(res, {
         statusCode: 200,
         message: 'Successfully deleted Time Slot !!',

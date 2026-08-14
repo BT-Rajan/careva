@@ -24,7 +24,7 @@ const getAllPatients = catchAsync(async (req: Request, res: Response) => {
 })
 
 const getPatient = catchAsync(async (req: Request, res: Response) => {
-    const result = await PatientService.getPatient(req.params.id);
+    const result = await PatientService.getPatient(req.user, req.params.id);
     sendResponse<Patient>(res, {
         statusCode: 200,
         message: 'Successfully Get Patient !!',

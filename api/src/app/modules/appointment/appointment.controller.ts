@@ -65,7 +65,7 @@ const deleteAppointment = catchAsync(async (req: Request, res: Response) => {
 })
 
 const updateAppointment = catchAsync(async (req: Request, res: Response) => {
-    const result = await AppointmentService.updateAppointment(req.params.id, req.body);
+    const result = await AppointmentService.updateAppointment(req.user, req.params.id, req.body);
     sendResponse<Appointments>(res, {
         statusCode: 200,
         message: 'Successfully Updated Appointment !!',
@@ -115,7 +115,7 @@ const getDoctorPatients = catchAsync(async (req: Request, res: Response) => {
 })
 
 const getPaymentInfoViaAppintmentId = catchAsync(async (req: Request, res: Response) => {
-    const result = await AppointmentService.getPaymentInfoViaAppintmentId(req.params.id);
+    const result = await AppointmentService.getPaymentInfoViaAppintmentId(req.user, req.params.id);
     sendResponse(res, {
         statusCode: 200,
         message: 'Successfully retrieve payment info !!',

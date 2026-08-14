@@ -19,6 +19,12 @@ const createPrescription = async (user: any, paylaod: any): Promise<{message: st
         }
     })
     if (!isAppointment) { throw new ApiError(httpStatus.NOT_FOUND, 'Appopintment is not found !!') }
+    // Pass 4: previously verified the caller was *a* doctor but never that the target
+    // appointment belonged to *that* doctor — any doctor could write a prescription
+    // against another doctor's patient/appointment.
+    if (isAppointment.doctorId !== isDoctor.id) {
+        throw new ApiError(httpStatus.FORBIDDEN, 'You are not allowed to prescribe for this appointment !!');
+    }
 
     await prisma.$transaction(async (tx) => {
         const {status, patientType, ...rest} = others;
@@ -77,6 +83,11 @@ const updatePrescriptionAndAppointment = async (user: any, paylaod: any): Promis
         }
     })
     if (!isPrescribed) { throw new ApiError(httpStatus.NOT_FOUND, 'Prescription is not found !!') }
+    // Pass 4: previously no ownership check — any doctor could update any other
+    // doctor's prescription (and its linked appointment) by supplying its id.
+    if (isPrescribed.doctorId !== isDoctor.id) {
+        throw new ApiError(httpStatus.FORBIDDEN, 'You are not allowed to update this prescription !!');
+    }
 
     await prisma.$transaction(async (tx) => {
         
@@ -119,7 +130,7 @@ const getAllPrescriptions = async (): Promise<Prescription[] | null> => {
     return result;
 }
 
-const getPrescriptionById = async (id: string): Promise<Prescription | null> => {
+const getPrescriptionById = async (reqUser: any, id: string): Promise<Prescription | null> => {
     const result = await prisma.prescription.findUnique({
         where: {
             id: id
@@ -162,6 +173,16 @@ const getPrescriptionById = async (id: string): Promise<Prescription | null> => 
             }
         }
     });
+    // Pass 4: previously no ownership check at all — any authenticated user of any role
+    // could fetch any prescription by id. Now: the prescribing doctor, the patient it
+    // belongs to, or an admin.
+    if (result) {
+        const isAdmin = reqUser?.role === 'admin';
+        const isOwner = result.doctorId === reqUser?.userId || result.patientId === reqUser?.userId;
+        if (!isAdmin && !isOwner) {
+            throw new ApiError(httpStatus.FORBIDDEN, 'You are not allowed to view this prescription !!');
+        }
+    }
     return result;
 }
 
@@ -222,7 +243,17 @@ const getDoctorPrescriptionById = async (user: any): Promise<Prescription[] | nu
     return result;
 }
 
-const deletePrescription = async (id: string): Promise<any> => {
+const deletePrescription = async (reqUser: any, id: string): Promise<any> => {
+    // Pass 4: previously no ownership check at all — any doctor (the route also allows
+    // admin) could delete any other doctor's prescription record.
+    const existing = await prisma.prescription.findUnique({ where: { id } });
+    if (!existing) {
+        throw new ApiError(httpStatus.NOT_FOUND, 'Prescription is not found !!');
+    }
+    const isAdmin = reqUser?.role === 'admin';
+    if (!isAdmin && existing.doctorId !== reqUser?.userId) {
+        throw new ApiError(httpStatus.FORBIDDEN, 'You are not allowed to delete this prescription !!');
+    }
     const result = await prisma.prescription.delete({
         where: {
             id: id
@@ -231,9 +262,30 @@ const deletePrescription = async (id: string): Promise<any> => {
     return result;
 }
 
-const updatePrescription = async (id: string, payload: Partial<Prescription>): Promise<Prescription> => {
+// Pass 4: fields no caller may set through this endpoint via mass-assignment — excludes
+// id/doctorId/patientId/appointmentId/timestamps, none of which should ever change via a
+// content edit.
+const PRESCRIPTION_EDITABLE_FIELDS = ['followUpdate', 'instruction', 'isFullfilled', 'isArchived', 'daignosis', 'disease', 'test'] as const;
+
+const updatePrescription = async (reqUser: any, id: string, payload: Partial<Prescription>): Promise<Prescription> => {
+    const existing = await prisma.prescription.findUnique({ where: { id } });
+    if (!existing) {
+        throw new ApiError(httpStatus.NOT_FOUND, 'Prescription is not found !!');
+    }
+    // Pass 4: previously no ownership check, and the full request body was passed
+    // straight to Prisma (mass-assignment).
+    const isAdmin = reqUser?.role === 'admin';
+    if (!isAdmin && existing.doctorId !== reqUser?.userId) {
+        throw new ApiError(httpStatus.FORBIDDEN, 'You are not allowed to update this prescription !!');
+    }
+    const data: Partial<Prescription> = {};
+    for (const field of PRESCRIPTION_EDITABLE_FIELDS) {
+        if (field in payload) {
+            (data as any)[field] = (payload as any)[field];
+        }
+    }
     const result = await prisma.prescription.update({
-        data: payload,
+        data,
         where: {
             id: id
         }

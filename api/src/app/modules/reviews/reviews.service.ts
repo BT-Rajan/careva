@@ -136,6 +136,15 @@ const replyReviewByDoctor = async (user: any, id: string, payload: Partial<Revie
     if (!isUserExist) {
         throw new ApiError(httpStatus.NOT_FOUND, 'Doctor Account is not found !!')
     }
+    // Pass 4: previously no ownership check — any doctor could reply to ANY review, not
+    // just reviews of themselves.
+    const review = await prisma.reviews.findUnique({ where: { id } });
+    if (!review) {
+        throw new ApiError(httpStatus.NOT_FOUND, 'Review is not found !!');
+    }
+    if (review.doctorId !== user.userId) {
+        throw new ApiError(httpStatus.FORBIDDEN, 'You are not allowed to reply to this review !!');
+    }
 
     const result = await prisma.reviews.update({
         data: {

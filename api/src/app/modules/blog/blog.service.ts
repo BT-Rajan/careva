@@ -107,17 +107,44 @@ const getBlog = async (id: string): Promise<Blogs | null> => {
     return result;
 }
 
-const deleteBlog = async (id: string): Promise<Blogs | null> => {
+const deleteBlog = async (reqUser: any, id: string): Promise<Blogs | null> => {
+    // Pass 4: previously no ownership check — any doctor could delete any other
+    // doctor's blog post.
+    const existing = await prisma.blogs.findUnique({ where: { id } });
+    if (!existing) {
+        throw new ApiError(httpStatus.NOT_FOUND, 'Blog is not found !!');
+    }
+    const isAdmin = reqUser?.role === 'admin';
+    if (!isAdmin && existing.userId !== reqUser?.userId) {
+        throw new ApiError(httpStatus.FORBIDDEN, 'You are not allowed to delete this blog !!');
+    }
     const result = await prisma.blogs.delete({
         where: { id }
     });
     return result;
 }
 
+const BLOG_PROTECTED_FIELDS = ['id', 'userId', 'createdAt', 'updatedAt'];
+
 const updateBlog = async (req: Request): Promise<Blogs | null> => {
     const file = req.file as IUpload;
     const id = req.params.id as string;
     const blogData = JSON.parse(req.body.data);
+    const reqUser: any = req.user;
+    const isAdmin = reqUser?.role === 'admin';
+
+    // Pass 4: previously no ownership check — any doctor could update any other
+    // doctor's blog post. Also strips userId/id/timestamps from mass-assignment.
+    const existing = await prisma.blogs.findUnique({ where: { id } });
+    if (!existing) {
+        throw new ApiError(httpStatus.NOT_FOUND, 'Blog is not found !!');
+    }
+    if (!isAdmin && existing.userId !== reqUser?.userId) {
+        throw new ApiError(httpStatus.FORBIDDEN, 'You are not allowed to update this blog !!');
+    }
+    for (const field of BLOG_PROTECTED_FIELDS) {
+        delete blogData[field];
+    }
     if (file) {
         const uploadImage = await CloudinaryHelper.uploadFile(file);
         if (uploadImage) {

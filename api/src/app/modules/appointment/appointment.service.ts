@@ -255,7 +255,18 @@ const getPatientAppointmentById = async (user: any): Promise<Appointments[] | nu
     return result;
 }
 
-const getPaymentInfoViaAppintmentId = async (id: string): Promise<any> => {
+const getPaymentInfoViaAppintmentId = async (reqUser: any, id: string): Promise<any> => {
+    // Pass 4: previously no ownership check — any authenticated patient or doctor could
+    // view any OTHER appointment's payment/financial info by supplying an arbitrary id.
+    const appointment = await prisma.appointments.findUnique({ where: { id } });
+    if (!appointment) {
+        throw new ApiError(httpStatus.NOT_FOUND, 'Appointment is not found !!');
+    }
+    const isAdmin = reqUser?.role === 'admin';
+    const isOwner = appointment.patientId === reqUser?.userId || appointment.doctorId === reqUser?.userId;
+    if (!isAdmin && !isOwner) {
+        throw new ApiError(httpStatus.FORBIDDEN, 'You are not allowed to view this payment info !!');
+    }
     const result = await prisma.payment.findFirst({
         where: {
             appointmentId: id
@@ -349,9 +360,25 @@ const deleteAppointment = async (id: string): Promise<any> => {
     return result;
 }
 
-const updateAppointment = async (id: string, payload: Partial<Appointments>): Promise<Appointments> => {
+const updateAppointment = async (reqUser: any, id: string, payload: Partial<Appointments>): Promise<Appointments> => {
+    // Pass 4: previously no ownership check, and the full request body was passed
+    // straight to Prisma (mass-assignment) — any authenticated patient/doctor could PATCH
+    // ANY appointment with arbitrary fields (paymentStatus, doctorId, etc.), not just
+    // their own. Confirmed via the frontend that every real caller (doctor Accept/Cancel
+    // buttons, admin panel) only ever sends `{ status }`, so restricting to that field
+    // doesn't break anything live. Full transition-legality rules (which status can
+    // follow which) are Pass 8's job — this only controls WHO can act and WHAT field.
+    const appointment = await prisma.appointments.findUnique({ where: { id } });
+    if (!appointment) {
+        throw new ApiError(httpStatus.NOT_FOUND, 'Appointment is not found !!');
+    }
+    const isAdmin = reqUser?.role === 'admin';
+    const isOwner = appointment.patientId === reqUser?.userId || appointment.doctorId === reqUser?.userId;
+    if (!isAdmin && !isOwner) {
+        throw new ApiError(httpStatus.FORBIDDEN, 'You are not allowed to update this appointment !!');
+    }
     const result = await prisma.appointments.update({
-        data: payload,
+        data: { status: payload.status },
         where: {
             id: id
         }
@@ -433,7 +460,7 @@ const getDoctorPatients = async (user: any): Promise<Patient[]> => {
     return patientList;
 }
 
-const updateAppointmentByDoctor = async (user: any, payload: Partial<Appointments>): Promise<Appointments | null> => {
+const updateAppointmentByDoctor = async (user: any, payload: Partial<Appointments> & { id?: string }): Promise<Appointments | null> => {
     const { userId } = user;
     const isDoctor = await prisma.doctor.findUnique({
         where: {
@@ -443,11 +470,26 @@ const updateAppointmentByDoctor = async (user: any, payload: Partial<Appointment
     if (!isDoctor) {
         throw new ApiError(httpStatus.NOT_FOUND, 'Doctor Account is not found !!')
     }
+    if (!payload.id) {
+        throw new ApiError(httpStatus.BAD_REQUEST, 'Appointment id is required !!')
+    }
+    // Pass 4: previously verified the caller was *a* doctor but never that the target
+    // appointment belonged to *that* doctor — any doctor could update any other doctor's
+    // appointments. Also restricted the update to a safe field set instead of accepting
+    // the full Partial<Appointments> body (mass-assignment).
+    const appointment = await prisma.appointments.findUnique({ where: { id: payload.id } });
+    if (!appointment) {
+        throw new ApiError(httpStatus.NOT_FOUND, 'Appointment is not found !!');
+    }
+    if (appointment.doctorId !== userId) {
+        throw new ApiError(httpStatus.FORBIDDEN, 'You are not allowed to update this appointment !!');
+    }
+    const { status, prescriptionStatus, description, reasonForVisit } = payload;
     const result = await prisma.appointments.update({
         where: {
             id: payload.id
         },
-        data: payload
+        data: { status, prescriptionStatus, description, reasonForVisit }
     })
     return result;
 }

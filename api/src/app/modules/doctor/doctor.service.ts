@@ -144,7 +144,13 @@ const getDoctor = async (id: string): Promise<Doctor | null> => {
     return result;
 }
 
-const deleteDoctor = async (id: string): Promise<any> => {
+const deleteDoctor = async (reqUser: any, id: string): Promise<any> => {
+    // Pass 4: previously any authenticated doctor could delete ANY doctor's account by
+    // supplying a different id — no ownership check at all. Now: self, or admin.
+    const isAdmin = reqUser?.role === 'admin';
+    if (!isAdmin && reqUser?.userId !== id) {
+        throw new ApiError(httpStatus.FORBIDDEN, "You are not allowed to delete this doctor account !!");
+    }
     const result = await prisma.$transaction(async (tx) => {
         const patient = await tx.doctor.delete({
             where: {
@@ -160,10 +166,29 @@ const deleteDoctor = async (id: string): Promise<any> => {
     return result;
 }
 
+// Pass 4: fields no caller may set through this endpoint via ordinary mass-assignment.
+// `verified` is the critical one — without this, a doctor could set `verified: true` in
+// their own profile-edit payload and self-approve, bypassing admin review entirely. Only
+// an admin caller (checked below) may set it.
+const DOCTOR_PROTECTED_FIELDS = ['id', 'email', 'createdAt', 'updatedAt', 'deletedAt', 'verified'];
+
 const updateDoctor = async (req: Request): Promise<Doctor> => {
     const file = req.file as IUpload;
     const id = req.params.id as string;
     const user = JSON.parse(req.body.data);
+    const reqUser: any = req.user;
+    const isAdmin = reqUser?.role === 'admin';
+
+    // Pass 4: previously any authenticated doctor could update ANY doctor's profile by
+    // supplying a different id — no ownership check at all.
+    if (!isAdmin && reqUser?.userId !== id) {
+        throw new ApiError(httpStatus.FORBIDDEN, "You are not allowed to update this doctor account !!");
+    }
+
+    for (const field of DOCTOR_PROTECTED_FIELDS) {
+        if (field === 'verified' && isAdmin) continue;
+        delete user[field];
+    }
 
     if (file) {
         const uploadImage = await CloudinaryHelper.uploadFile(file);

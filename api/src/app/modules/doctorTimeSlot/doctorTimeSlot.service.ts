@@ -62,7 +62,16 @@ const createTimeSlot = async (user: any, payload: any): Promise<DoctorTimeSlot |
     return result;
 }
 
-const deleteTimeSlot = async (id: string): Promise<DoctorTimeSlot | null> => {
+const deleteTimeSlot = async (user: any, id: string): Promise<DoctorTimeSlot | null> => {
+    // Pass 4: previously any authenticated doctor could delete ANY OTHER doctor's entire
+    // schedule template by supplying an arbitrary id — no ownership check at all.
+    const existing = await prisma.doctorTimeSlot.findUnique({ where: { id } });
+    if (!existing) {
+        throw new ApiError(httpStatus.NOT_FOUND, 'Time Slot is not found !!');
+    }
+    if (existing.doctorId !== user?.userId) {
+        throw new ApiError(httpStatus.FORBIDDEN, 'You are not allowed to delete this time slot !!');
+    }
     const result = await prisma.doctorTimeSlot.delete({
         where: {
             id: id
@@ -71,12 +80,17 @@ const deleteTimeSlot = async (id: string): Promise<DoctorTimeSlot | null> => {
     return result;
 }
 
-const getTimeSlot = async (id: string): Promise<DoctorTimeSlot | null> => {
+const getTimeSlot = async (user: any, id: string): Promise<DoctorTimeSlot | null> => {
+    // Pass 4: previously any authenticated doctor could view ANY OTHER doctor's schedule
+    // record by id — no ownership check at all.
     const result = await prisma.doctorTimeSlot.findFirst({
         where: {
             id: id
         }
     })
+    if (result && result.doctorId !== user?.userId) {
+        throw new ApiError(httpStatus.FORBIDDEN, 'You are not allowed to view this time slot !!');
+    }
     return result;
 }
 
@@ -132,9 +146,15 @@ const updateTimeSlot = async (user: any, id: string, payload: any): Promise<{ me
     const { timeSlot, create } = payload;
 
     if (create && create.length > 0) {
+        // Pass 4 CRITICAL FIX: this previously looked up the target DoctorTimeSlot by
+        // `day` ALONE, with no `doctorId` filter — meaning it could find and attach new
+        // ScheduleDay rows to a DIFFERENT doctor's time-slot template, if that doctor
+        // happened to already have a row for the same day. Scoped to the authenticated
+        // doctor's own record.
         const doctorTimeSlot = await prisma.doctorTimeSlot.findFirst({
             where: {
-                day: create[0].day
+                day: create[0].day,
+                doctorId: isDoctor.id
             }
         })
         if (!doctorTimeSlot) {
@@ -156,17 +176,30 @@ const updateTimeSlot = async (user: any, id: string, payload: any): Promise<{ me
     }
 
     if (timeSlot && timeSlot.length > 0) {
+        // Pass 4 CRITICAL FIX: this previously updated ScheduleDay rows by id with NO
+        // check that the row's parent DoctorTimeSlot belonged to the authenticated
+        // doctor — any doctor could edit any other doctor's individual schedule entries
+        // by supplying arbitrary ScheduleDay ids. The nested relation filter below makes
+        // the update a no-op (0 rows) unless the row actually belongs to this doctor;
+        // that's then treated as a failure rather than a silent success.
         await Promise.all(timeSlot.map(async (item: ScheduleDay) => {
             const { doctorTimeSlotId, ...others } = item;
             try {
-                await prisma.scheduleDay.updateMany({
-                    where: { id: others.id },
+                const updated = await prisma.scheduleDay.updateMany({
+                    where: {
+                        id: others.id,
+                        doctorTimeSlot: { doctorId: isDoctor.id }
+                    },
                     data: {
                         startTime: others.startTime,
                         endTime: others.endTime
                     }
                 })
+                if (updated.count === 0) {
+                    throw new ApiError(httpStatus.FORBIDDEN, 'You are not allowed to update this time slot !!')
+                }
             } catch (error) {
+                if (error instanceof ApiError) throw error;
                 throw new ApiError(httpStatus.EXPECTATION_FAILED, 'Failed to Update')
             }
         }))

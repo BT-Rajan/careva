@@ -32,7 +32,7 @@ const getDoctorPrescriptionById = catchAsync(async (req: Request, res: Response)
 })
 
 const updatePrescription = catchAsync(async (req: Request, res: Response) => {
-    const result = await PrescriptionService.updatePrescription(req.params.id, req.body);
+    const result = await PrescriptionService.updatePrescription(req.user, req.params.id, req.body);
     sendResponse(res, {
         statusCode: 200,
         message: 'Successfully Updated Prescription !!',
@@ -52,7 +52,7 @@ const getPatientPrescriptionById = catchAsync(async (req: Request, res: Response
 })
 
 const deletePrescription = catchAsync(async (req: Request, res: Response) => {
-    const result = await PrescriptionService.deletePrescription(req.params.id);
+    const result = await PrescriptionService.deletePrescription(req.user, req.params.id);
     sendResponse(res, {
         statusCode: 200,
         message: 'Successfully Deleted Prescription !!',
@@ -62,7 +62,7 @@ const deletePrescription = catchAsync(async (req: Request, res: Response) => {
 })
 
 const getPrescriptionById = catchAsync(async (req: Request, res: Response) => {
-    const result = await PrescriptionService.getPrescriptionById(req.params.id);
+    const result = await PrescriptionService.getPrescriptionById(req.user, req.params.id);
     sendResponse(res, {
         statusCode: 200,
         message: 'Successfully Retrieve Prescription !!',

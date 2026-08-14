@@ -90,9 +90,15 @@ const Doctors = () => {
 
     const handleStatusToggle = async (doctor) => {
         try {
+            // Pass 4: this endpoint expects a multipart FormData body with a `data` field
+            // containing a JSON string (same convention the doctor's own profile-edit form
+            // uses) — sending a plain object here previously failed server-side with a
+            // JSON parse error on every click.
+            const formData = new FormData();
+            formData.append('data', JSON.stringify({ verified: !doctor.verified }));
             await updateDoctor({
                 id: doctor.id,
-                data: { verified: !doctor.verified }
+                data: formData
             }).unwrap();
             message.success('Doctor status updated');
             refetch();
