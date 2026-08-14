@@ -1,4 +1,4 @@
-import { Appointments, Patient, Payment, paymentStatus } from "@prisma/client";
+import { Appointments, Patient, Payment, paymentStatus, Prisma } from "@prisma/client";
 import prisma from "../../../shared/prisma";
 import ApiError from "../../../errors/apiError";
 import httpStatus from "http-status";
@@ -6,6 +6,95 @@ import moment from 'moment';
 import { EmailtTransporter } from "../../../helpers/emailTransporter";
 import * as path from 'path';
 import config from "../../../config";
+
+// Pass 5 — Appointment & Slot Engine.
+//
+// Before this pass, NOTHING in the database or application code checked whether a slot
+// had capacity before creating an appointment (Gap G9, docs/passes/01-domain-state-model.md
+// §4.7/§5). `createAppointment` and `createAppointmentByUnAuthenticateUser` just inserted
+// a row with whatever `scheduleDate`/`scheduleTime` strings the client sent — no validation
+// that the time was even part of the doctor's configured hours, and no cap on how many
+// appointments could pile up on the exact same doctor+date+time. This function is the
+// fix, called from inside the SAME transaction as the appointment insert, under
+// Serializable isolation (see the two callers below) so that two concurrent booking
+// requests for the last remaining seat in a slot cannot both succeed — Postgres will
+// abort one of them with a serialization failure, which the caller retries/reports.
+//
+// Capacity comes from `DoctorTimeSlot.maximumPatient`, set per weekday
+// (docs/passes/01-domain-state-model.md §4.7 flagged this as the central gap this pass
+// exists to close). Cancelled appointments ('cancel' — see Pass 1 §3.2 on the current
+// literal status strings; this intentionally does not touch that representation, which is
+// Pass 8's job) don't count against capacity, since cancelling frees the seat.
+const assertSlotAvailable = async (
+    tx: Prisma.TransactionClient,
+    doctorId: string,
+    scheduleDate: string | undefined,
+    scheduleTime: string | undefined
+): Promise<void> => {
+    if (!scheduleDate || !scheduleTime) {
+        throw new ApiError(httpStatus.BAD_REQUEST, 'scheduleDate and scheduleTime are required !!');
+    }
+
+    const weekday = moment(scheduleDate).format('dddd').toLowerCase();
+    const doctorTimeSlot = await tx.doctorTimeSlot.findFirst({
+        where: { doctorId, day: weekday as any },
+        include: { timeSlot: true }
+    });
+    if (!doctorTimeSlot) {
+        throw new ApiError(httpStatus.BAD_REQUEST, "Doctor is not available on the selected day !!");
+    }
+
+    // Defense in depth: previously nothing checked that scheduleTime actually fell within
+    // one of the doctor's configured ranges — a client could submit any arbitrary time
+    // string. Uses the same 30-minute grid getAppointmentTimeOfEachDoctor generates for
+    // display, so a time is valid if it falls inside any configured [startTime, endTime).
+    const requested = moment(scheduleTime, ['hh:mm a', 'HH:mm']);
+    const isWithinConfiguredRange = doctorTimeSlot.timeSlot.some((range) => {
+        const start = moment(range.startTime, ['hh:mm a', 'HH:mm']);
+        const end = moment(range.endTime, ['hh:mm a', 'HH:mm']);
+        return requested.isSameOrAfter(start) && requested.isBefore(end);
+    });
+    if (!isWithinConfiguredRange) {
+        throw new ApiError(httpStatus.BAD_REQUEST, "Selected time is outside the doctor's available hours !!");
+    }
+
+    const maximumPatient = doctorTimeSlot.maximumPatient ?? 1;
+    const existingCount = await tx.appointments.count({
+        where: {
+            doctorId,
+            scheduleDate,
+            scheduleTime,
+            status: { not: 'cancel' }
+        }
+    });
+    if (existingCount >= maximumPatient) {
+        throw new ApiError(httpStatus.CONFLICT, 'This time slot is fully booked. Please choose another time !!');
+    }
+}
+
+// Postgres error code 40001 ("serialization_failure") surfaces through Prisma as P2034.
+// This is the EXPECTED, correct outcome of two concurrent requests racing for the same
+// slot under Serializable isolation — not a bug. One retry is standard practice for
+// serializable transactions (most conflicts are transient); if it still fails on retry,
+// that's reported as a real "slot no longer available" rather than a generic 500.
+const runBookingTransaction = async <T>(fn: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> => {
+    const attempt = () => prisma.$transaction(fn, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, maxWait: 10000, timeout: 15000 });
+    try {
+        return await attempt();
+    } catch (error: any) {
+        if (error?.code === 'P2034') {
+            try {
+                return await attempt();
+            } catch (retryError: any) {
+                if (retryError?.code === 'P2034') {
+                    throw new ApiError(httpStatus.CONFLICT, 'This time slot was just booked by someone else. Please choose another time !!');
+                }
+                throw retryError;
+            }
+        }
+        throw error;
+    }
+}
 
 const createAppointment = async (payload: any): Promise<Appointments | null | any> => {
 
@@ -32,7 +121,11 @@ const createAppointment = async (payload: any): Promise<Appointments | null | an
     }
     patientInfo['paymentStatus'] = paymentStatus.paid;
   
-    const result = await prisma.$transaction(async (tx) => {
+    const result = await runBookingTransaction(async (tx) => {
+        // Pass 5: the single most important check in the whole booking flow — must run
+        // first, inside the same transaction as the insert. See assertSlotAvailable above.
+        await assertSlotAvailable(tx, patientInfo.doctorId, patientInfo.scheduleDate, patientInfo.scheduleTime);
+
         const previousAppointment = await tx.appointments.findFirst({
             orderBy: { createdAt: 'desc' },
             take: 1
@@ -118,7 +211,7 @@ const createAppointmentByUnAuthenticateUser = async (payload: any): Promise<Appo
         }
     }
 
-    const result = await prisma.$transaction(async (tx) => {
+    const result = await runBookingTransaction(async (tx) => {
         const previousAppointment = await tx.appointments.findFirst({
             orderBy: { createdAt: 'desc' },
             take: 1
@@ -140,6 +233,10 @@ const createAppointmentByUnAuthenticateUser = async (payload: any): Promise<Appo
             throw new ApiError(httpStatus.NOT_FOUND, 'Doctor Account is not found !!');
         }
         const docFee = doctorForFee.price != null ? Number(doctorForFee.price) : 60;
+
+        // Pass 5: same check as the authenticated path — must run before the insert,
+        // inside this transaction. See assertSlotAvailable above.
+        await assertSlotAvailable(tx, doctorIdForUnauth, patientInfo.scheduleDate, patientInfo.scheduleTime);
 
         const appointment = await tx.appointments.create({
             data: patientInfo,

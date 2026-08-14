@@ -9,7 +9,7 @@ at a time, in order. Each pass is committed and pushed on completion.
 | 2 | Database Integrity | ✅ Complete |
 | 3 | Authentication | ✅ Complete |
 | 4 | Authorization & RBAC | ✅ Complete |
-| 5 | Appointment & Slot Engine | ⏳ Not started |
+| 5 | Appointment & Slot Engine | ✅ Complete |
 | 6 | Booking Transaction | ⏳ Not started |
 | 7 | Payment System | ⏳ Not started |
 | 8 | Appointment State Machine | ⏳ Not started |
