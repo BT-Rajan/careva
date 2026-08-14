@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, useRef } from 'react'
 import Footer from '../../Shared/Footer/Footer'
 import img from '../../../images/doc/doctor 3.jpg'
 import './index.css';
@@ -43,6 +43,13 @@ const DoctorBooking = () => {
     const [isCheck, setIsChecked] = useState(false);
     const [patientId, setPatientId] = useState('');
     const [createAppointment, { data: appointmentData, isSuccess: createIsSuccess, isError: createIsError, error: createError, isLoading: createIsLoading }] = useCreateAppointmentMutation();
+    // Pass 6: see AppointmentPage.jsx for the full rationale — one key per booking
+    // attempt, reused across double-clicks/retries of this same flow.
+    const bookingAttemptIdRef = useRef(
+        typeof crypto !== 'undefined' && crypto.randomUUID
+            ? crypto.randomUUID()
+            : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
     const { doctorId } = useParams();
     const navigation = useNavigate();
     const { data, isLoading, isError, error } = useGetDoctorQuery(doctorId);
@@ -162,7 +169,7 @@ const DoctorBooking = () => {
             expiredMonth: selectValue.expiredMonth,
             nameOnCard: selectValue.nameOnCard
         }
-        createAppointment(obj);
+        createAppointment({ data: obj, idempotencyKey: bookingAttemptIdRef.current });
     }
 
     useEffect(() => {

@@ -135,8 +135,11 @@ Pass 2's own scope explicitly lists "Idempotency records" and "Audit records" as
 database-integrity concerns. Both tables are added now, **unused by any service code in
 this pass** — no endpoint reads or writes them yet:
 
-- `IdempotencyKey` (`key`, `response`, `statusCode`, `createdAt`) — will be consumed
-  starting in **Pass 20 — Concurrency & Idempotency**.
+- `IdempotencyKey` (`key`, `response`, `statusCode`, `createdAt`) — first consumed by
+  **Pass 6 — Booking Transaction** (correction: originally written here as "starting in
+  Pass 20," which undersold it — Pass 6's own scope explicitly calls for booking-specific
+  idempotency; Pass 20 stress-tests the pattern and extends it to other operations like
+  webhooks and refunds once those exist). See `docs/passes/06-booking-transaction.md`.
 - `AuditLog` (`actorId`, `actorRole`, `action`, `entityType`, `entityId`, `metadata`,
   `createdAt`) — will be consumed starting in **Pass 22 — Audit & Observability**.
 

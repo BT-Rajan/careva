@@ -6,18 +6,20 @@ const APPOINTMENT_URL = '/appointment'
 export const appointmentApi = baseApi.injectEndpoints({
     endpoints: (build) => ({
         createAppointment: build.mutation({
-            query: (data) => ({
+            query: ({ data, idempotencyKey } = {}) => ({
                 url: `${APPOINTMENT_URL}/create`,
                 method: 'POST',
-                data: data
+                data: data,
+                headers: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined
             }),
             invalidatesTags: [tagTypes.appointments]
         }),
         createAppointmentByUnauthenticateUser: build.mutation({
-            query: (data) => ({
+            query: ({ data, idempotencyKey } = {}) => ({
                 url: `${APPOINTMENT_URL}/create-un-authenticate`,
                 method: 'POST',
-                data: data
+                data: data,
+                headers: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined
             }),
             invalidatesTags: [tagTypes.appointments]
         }),

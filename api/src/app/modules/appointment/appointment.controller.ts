@@ -5,7 +5,11 @@ import { AppointmentService } from "./appointment.service";
 import { Appointments, Patient } from "@prisma/client";
 
 const createAppointment = catchAsync(async (req: Request, res: Response) => {
-    const result = await AppointmentService.createAppointment(req.body);
+    // Pass 6: optional client-supplied key for duplicate-submission protection (double
+    // click, retry-after-timeout). Absent header = no idempotency protection for that
+    // request, same as before this pass — this is additive, not a breaking requirement.
+    const idempotencyKey = req.headers['idempotency-key'] as string | undefined;
+    const result = await AppointmentService.createAppointment(req.body, idempotencyKey);
     sendResponse(res, {
         statusCode: 200,
         message: 'Successfully Appointment Created !!',
@@ -14,7 +18,8 @@ const createAppointment = catchAsync(async (req: Request, res: Response) => {
     })
 })
 const createAppointmentByUnAuthenticateUser = catchAsync(async (req: Request, res: Response) => {
-    const result = await AppointmentService.createAppointmentByUnAuthenticateUser(req.body);
+    const idempotencyKey = req.headers['idempotency-key'] as string | undefined;
+    const result = await AppointmentService.createAppointmentByUnAuthenticateUser(req.body, idempotencyKey);
     sendResponse(res, {
         statusCode: 200,
         message: 'Successfully Appointment Created !!',

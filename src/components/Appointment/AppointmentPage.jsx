@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import Footer from '../Shared/Footer/Footer';
 import Header from '../Shared/Header/Header';
 import CheckoutPage from '../Booking/BookingCheckout/CheckoutPage';
@@ -49,6 +49,17 @@ const AppointmentPage = () => {
 
   const [createAppointment, { data: appointmentData, isError, isSuccess, isLoading, error }] =
     useCreateAppointmentMutation();
+  // Pass 6: one key per booking attempt, generated once and reused across re-renders and
+  // repeated submit clicks of the SAME attempt — so a double-click or a client retry
+  // after a perceived timeout replays the original result instead of creating a second
+  // appointment. Safe to keep reusing across genuinely failed/retried attempts too: the
+  // backend only ever caches a response on success, so nothing gets incorrectly replayed
+  // until a booking actually succeeds (at which point this flow navigates away).
+  const bookingAttemptIdRef = useRef(
+    typeof crypto !== 'undefined' && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  );
 
   const handleChange = (e) => setSelectValue({ ...selectValue, [e.target.name]: e.target.value });
 
@@ -97,7 +108,7 @@ const AppointmentPage = () => {
       expiredMonth: selectValue.expiredMonth,
       nameOnCard: selectValue.nameOnCard,
     };
-    createAppointment(obj);
+    createAppointment({ data: obj, idempotencyKey: bookingAttemptIdRef.current });
   };
 
   useEffect(() => {

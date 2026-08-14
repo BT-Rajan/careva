@@ -96,7 +96,54 @@ const runBookingTransaction = async <T>(fn: (tx: Prisma.TransactionClient) => Pr
     }
 }
 
-const createAppointment = async (payload: any): Promise<Appointments | null | any> => {
+// Pass 6 — Booking Transaction: "use idempotency where appropriate" (the original
+// engineering-passes plan calls this out specifically for the booking transaction; Pass 2
+// laid the IdempotencyKey table down for exactly this, and Pass 20 later stress-tests and
+// extends the same pattern to other endpoints — webhooks, refunds, cancellations).
+//
+// The problem this closes: a double-click on "Confirm booking," or a client retrying
+// after a network timeout without knowing whether the first request actually landed,
+// previously had no protection at all — each identical submission created a brand new
+// appointment (and a brand new payment record). Pass 5's SERIALIZABLE isolation makes
+// concurrent *different* bookings safe against each other, but does nothing to stop the
+// *same* logical booking attempt from succeeding twice.
+//
+// Design: the client sends a stable `Idempotency-Key` header (a UUID generated once per
+// booking attempt, reused across retries of that same attempt — see
+// src/components/Appointment/AppointmentPage.jsx). Both the lookup and the eventual
+// record-keeping happen INSIDE the same booking transaction as the appointment/payment
+// insert, so there's no separate "claim" step and no window for an orphaned in-progress
+// marker: either the whole transaction (idempotency row + appointment + payment) commits
+// together, or none of it does. Two genuinely concurrent submissions with the same key
+// race on inserting the same IdempotencyKey row; SERIALIZABLE catches that exactly like
+// any other conflict, and runBookingTransaction's existing retry then finds the winner's
+// committed row and replays its response instead of creating a second appointment.
+const getIdempotentReplay = async (tx: Prisma.TransactionClient, idempotencyKey: string | undefined): Promise<any | null> => {
+    if (!idempotencyKey) return null;
+    const existing = await tx.idempotencyKey.findUnique({ where: { key: idempotencyKey } });
+    if (existing && existing.response) {
+        return existing.response;
+    }
+    return null;
+}
+
+const recordIdempotentResponse = async (tx: Prisma.TransactionClient, idempotencyKey: string | undefined, response: any): Promise<void> => {
+    if (!idempotencyKey) return;
+    // Prisma's Json column needs plain JSON values — round-tripping through
+    // JSON.stringify/parse converts Date objects (createdAt/updatedAt/dateOfBirth on the
+    // included doctor/patient records) to ISO strings instead of passing raw Date
+    // instances, which Prisma would otherwise reject as invalid Json input.
+    const safeResponse = JSON.parse(JSON.stringify(response));
+    await tx.idempotencyKey.create({
+        data: {
+            key: idempotencyKey,
+            response: safeResponse,
+            statusCode: 200
+        }
+    });
+}
+
+const createAppointment = async (payload: any, idempotencyKey?: string): Promise<Appointments | null | any> => {
 
     const { patientInfo, payment } = payload;
     if(patientInfo.patientId){
@@ -122,6 +169,11 @@ const createAppointment = async (payload: any): Promise<Appointments | null | an
     patientInfo['paymentStatus'] = paymentStatus.paid;
   
     const result = await runBookingTransaction(async (tx) => {
+        // Pass 6: if this exact booking attempt already succeeded (same Idempotency-Key),
+        // replay the original result instead of creating a second appointment.
+        const replay = await getIdempotentReplay(tx, idempotencyKey);
+        if (replay) return replay;
+
         // Pass 5: the single most important check in the whole booking flow — must run
         // first, inside the same transaction as the insert. See assertSlotAvailable above.
         await assertSlotAvailable(tx, patientInfo.doctorId, patientInfo.scheduleDate, patientInfo.scheduleTime);
@@ -192,13 +244,23 @@ const createAppointment = async (payload: any): Promise<Appointments | null | an
         const replacementObj = appointmentObj;
         const subject = `Appointment Confirm With Dr ${appointment?.doctor?.firstName + ' ' + appointment?.doctor?.lastName} at ${appointment.scheduleDate} + ' ' + ${appointment.scheduleTime}`
         const toMail = `${appointment.email + ',' + appointment.doctor?.email}`;
-        EmailtTransporter({ pathName, replacementObj, toMail, subject })
+        // Pass 6: EmailtTransporter is async and deliberately NOT awaited here — a slow or
+        // failing email provider must never block or fail a successful booking. But an
+        // un-awaited async call that throws becomes an unhandled promise rejection, and
+        // Node 20+ terminates the process on those by default — meaning a single failed
+        // confirmation email could previously have crashed the entire API for every other
+        // in-flight request. The .catch here makes "email is best-effort" an explicit,
+        // safe design decision instead of an accidental process-crash risk. Real
+        // retry/delivery-tracking is Pass 16's job (Notifications) — this only stops it
+        // from being able to take the server down.
+        EmailtTransporter({ pathName, replacementObj, toMail, subject }).catch((err) => console.error('Failed to send appointment confirmation email:', err));
+        await recordIdempotentResponse(tx, idempotencyKey, appointment);
         return appointment;
     });
     return result;
 }
 
-const createAppointmentByUnAuthenticateUser = async (payload: any): Promise<Appointments | null> => {
+const createAppointmentByUnAuthenticateUser = async (payload: any, idempotencyKey?: string): Promise<Appointments | null> => {
     const { patientInfo, payment } = payload;
     if(patientInfo.patientId){
         const isUserExist = await prisma.patient.findUnique({
@@ -212,6 +274,10 @@ const createAppointmentByUnAuthenticateUser = async (payload: any): Promise<Appo
     }
 
     const result = await runBookingTransaction(async (tx) => {
+        // Pass 6: same replay-on-duplicate-submit protection as the authenticated path.
+        const replay = await getIdempotentReplay(tx, idempotencyKey);
+        if (replay) return replay;
+
         const previousAppointment = await tx.appointments.findFirst({
             orderBy: { createdAt: 'desc' },
             take: 1
@@ -272,7 +338,10 @@ const createAppointmentByUnAuthenticateUser = async (payload: any): Promise<Appo
         const subject = `Appointment Confirm at ${appointment.scheduleDate} ${appointment.scheduleTime}`
 
         const toMail = `${appointment.email}`;
-        EmailtTransporter({ pathName, replacementObj, toMail, subject })
+        // Pass 6: same reasoning as the authenticated path above — email failure must
+        // never crash the process or block the booking.
+        EmailtTransporter({ pathName, replacementObj, toMail, subject }).catch((err) => console.error('Failed to send guest appointment confirmation email:', err));
+        await recordIdempotentResponse(tx, idempotencyKey, appointment);
         return appointment;
     })
 
