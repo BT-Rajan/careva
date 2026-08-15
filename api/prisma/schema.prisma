@@ -162,7 +162,21 @@ model Appointments {
   scheduleDate       String?
   scheduleTime       String?
   reasonForVisit     String?
-  status             String?             @default("pending")
+  // Pass 8 — Appointment State Machine. Was `String? @default("pending")` — an
+  // unconstrained free-text column (Pass 1 §3.2 documented the real values actually
+  // written: "pending", "scheduled", "cancel", and "Completed" — the last of which was
+  // referenced in 4 frontend files but never once actually set by any code path). Now a
+  // real enum; illegal values are a hard database-level rejection instead of a silent
+  // typo. See docs/passes/08-appointment-state-machine.md for the legacy-string mapping
+  // and the transition rules enforced in appointment-state-machine.ts.
+  status             AppointmentStatus?  @default(PENDING)
+  // Pass 8: lightweight per-row "last transition" audit — who moved this appointment to
+  // its current status, when, and why. Full transition history goes to AuditLog (Pass 2)
+  // as each transition happens; these three fields are just the fast/cheap "latest"
+  // snapshot for display, not a replacement for the audit trail.
+  statusChangedAt    DateTime?
+  statusChangedBy    String?
+  statusChangeReason String?
   paymentStatus      paymentStatus?      @default(unpaid)
   prescriptionStatus prescriptionStatus? @default(notIssued)
   isFollowUp         Boolean?            @default(false)
@@ -458,6 +472,22 @@ enum paymentStatus {
 // Pass 7 — Payment System. India and Kuwait are Careva's two markets. KWD is a
 // 3-decimal-place currency (1000 fils = 1 KWD) — see api/src/shared/money.ts for why
 // that matters for how amounts are stored.
+// Pass 8 — Appointment State Machine. The target model from
+// docs/passes/01-domain-state-model.md §4.2, now actually implemented — see
+// appointment-state-machine.ts for the transition table and per-transition
+// authorization (who may perform which move).
+enum AppointmentStatus {
+  PENDING
+  SCHEDULED
+  DECLINED
+  EXPIRED
+  COMPLETED
+  CANCELLED_BY_PATIENT
+  CANCELLED_BY_DOCTOR
+  CANCELLED_BY_ADMIN
+  NO_SHOW
+}
+
 enum Currency {
   INR
   KWD

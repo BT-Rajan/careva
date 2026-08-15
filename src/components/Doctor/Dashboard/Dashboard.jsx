@@ -49,7 +49,7 @@ const DoctorDashboard = () => {
 	const stats = useMemo(() => {
 		const totalAppointments = appointments.length;
 		const todayAppointments = appointments.filter((a) => moment(a.scheduleDate).isSame(moment(), 'day')).length;
-		const pendingAppointments = appointments.filter((a) => a.status === 'pending').length;
+		const pendingAppointments = appointments.filter((a) => a.status === 'PENDING').length;
 		const totalRevenue = invoices.reduce((sum, inv) => sum + (inv.totalAmount || 0), 0);
 
 		return {
@@ -101,7 +101,7 @@ const DoctorDashboard = () => {
 			dataIndex: 'status',
 			key: 'status',
 			render: (status) => (
-				<Tag color={status === 'pending' ? 'gold' : status === 'Completed' ? 'green' : 'blue'}>{status}</Tag>
+				<Tag color={status === 'PENDING' ? 'gold' : status === 'COMPLETED' ? 'green' : ['DECLINED', 'CANCELLED_BY_PATIENT', 'CANCELLED_BY_DOCTOR', 'CANCELLED_BY_ADMIN'].includes(status) ? 'red' : status === 'NO_SHOW' ? 'volcano' : 'blue'}>{status}</Tag>
 			),
 		},
 		{
@@ -212,7 +212,7 @@ const PatientDashboard = () => {
 	const stats = useMemo(() => {
 		const totalSpent = invoices.reduce((sum, inv) => sum + (inv.totalAmount || 0), 0);
 		const upcomingAppointments = appointments.filter((a) => moment(a.scheduleDate).isAfter(moment())).length;
-		const completedAppointments = appointments.filter((a) => a.status === 'Completed').length;
+		const completedAppointments = appointments.filter((a) => a.status === 'COMPLETED').length;
 
 		return {
 			totalAppointments: appointments.length,
@@ -223,7 +223,7 @@ const PatientDashboard = () => {
 	}, [appointments, invoices]);
 
 	const recentAppointments = appointments.slice(0, 5);
-	const lastVisit = appointments.find((a) => a.status === 'Completed');
+	const lastVisit = appointments.find((a) => a.status === 'COMPLETED');
 	const medCount = prescriptions?.reduce((n, p) => n + (p.medicines?.length || 0), 0) || 0;
 
 	const columns = [
@@ -259,7 +259,7 @@ const PatientDashboard = () => {
 			dataIndex: 'status',
 			key: 'status',
 			render: (status) => (
-				<Tag color={status === 'pending' ? 'gold' : status === 'Completed' ? 'green' : 'blue'}>{status}</Tag>
+				<Tag color={status === 'PENDING' ? 'gold' : status === 'COMPLETED' ? 'green' : ['DECLINED', 'CANCELLED_BY_PATIENT', 'CANCELLED_BY_DOCTOR', 'CANCELLED_BY_ADMIN'].includes(status) ? 'red' : status === 'NO_SHOW' ? 'volcano' : 'blue'}>{status}</Tag>
 			),
 		},
 		{

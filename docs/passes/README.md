@@ -12,7 +12,7 @@ at a time, in order. Each pass is committed and pushed on completion.
 | 5 | Appointment & Slot Engine | ✅ Complete |
 | 6 | Booking Transaction | ✅ Complete |
 | 7 | Payment System | ✅ Complete (backend; frontend checkout UI deferred — see doc) |
-| 8 | Appointment State Machine | ⏳ Not started |
+| 8 | Appointment State Machine | ✅ Complete |
 | 9 | Cancellation & Rescheduling | ⏳ Not started |
 | 10 | Doctor Lifecycle | ⏳ Not started |
 | 11 | Doctor Schedule Engine | ⏳ Not started |

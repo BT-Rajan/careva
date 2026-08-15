@@ -41,24 +41,41 @@ const AdminAppointments = () => {
 
     const statusOptions = [
         { label: 'All Status', value: null },
-        { label: 'Pending', value: 'pending' },
-        { label: 'Scheduled', value: 'scheduled' },
-        { label: 'Confirmed', value: 'confirmed' },
-        { label: 'In Progress', value: 'InProgress' },
-        { label: 'Completed', value: 'Completed' },
-        { label: 'Cancelled', value: 'cancel' },
+        { label: 'Pending', value: 'PENDING' },
+        { label: 'Scheduled', value: 'SCHEDULED' },
+        { label: 'Completed', value: 'COMPLETED' },
+        { label: 'Declined', value: 'DECLINED' },
+        { label: 'Cancelled by patient', value: 'CANCELLED_BY_PATIENT' },
+        { label: 'Cancelled by doctor', value: 'CANCELLED_BY_DOCTOR' },
+        { label: 'Cancelled by admin', value: 'CANCELLED_BY_ADMIN' },
+        { label: 'No-show', value: 'NO_SHOW' },
+        { label: 'Expired', value: 'EXPIRED' },
     ];
 
     const getStatusColor = (status) => {
         const colors = {
-            pending: 'gold',
-            scheduled: 'blue',
-            confirmed: 'cyan',
-            InProgress: 'purple',
-            Completed: 'green',
-            cancel: 'red',
+            PENDING: 'gold',
+            SCHEDULED: 'blue',
+            COMPLETED: 'green',
+            DECLINED: 'red',
+            CANCELLED_BY_PATIENT: 'red',
+            CANCELLED_BY_DOCTOR: 'red',
+            CANCELLED_BY_ADMIN: 'red',
+            NO_SHOW: 'volcano',
+            EXPIRED: 'default',
         };
         return colors[status] || 'default';
+    };
+
+    // Pass 8: mirrors the admin-triggerable edges of appointment-state-machine.ts's
+    // TRANSITIONS/TRANSITION_ACTORS on the backend — kept intentionally small (only the
+    // two non-terminal states) since that's the part that changes if the graph does.
+    // EXPIRED is deliberately excluded — it's reserved for a future background job, not
+    // triggerable by any user, so it's never offered here even though it's a valid
+    // PENDING outcome per the backend graph.
+    const ADMIN_LEGAL_NEXT_STATES = {
+        PENDING: ['PENDING', 'SCHEDULED', 'DECLINED'],
+        SCHEDULED: ['SCHEDULED', 'COMPLETED', 'CANCELLED_BY_DOCTOR', 'CANCELLED_BY_PATIENT', 'CANCELLED_BY_ADMIN', 'NO_SHOW'],
     };
 
     const handleStatusChange = async (id, newStatus) => {
@@ -145,22 +162,31 @@ const AdminAppointments = () => {
             dataIndex: 'status',
             key: 'status',
             width: 150,
-            render: (status, record) => (
-                <Select
-                    value={status}
-                    onChange={(value) => handleStatusChange(record.id, value)}
-                    style={{ width: '100%' }}
-                    size="small"
-                >
-                    {statusOptions.slice(1).map(opt => (
-                        <Select.Option key={opt.value} value={opt.value}>
-                            <Tag color={getStatusColor(opt.value)} style={{ margin: 0 }}>
-                                {opt.label}
-                            </Tag>
-                        </Select.Option>
-                    ))}
-                </Select>
-            ),
+            render: (status, record) => {
+                const legalNext = ADMIN_LEGAL_NEXT_STATES[status];
+                if (!legalNext) {
+                    // Terminal state (COMPLETED, DECLINED, any CANCELLED_*, NO_SHOW,
+                    // EXPIRED) — the backend's state machine has zero legal outgoing
+                    // transitions from any of these, so there's nothing to offer.
+                    return <Tag color={getStatusColor(status)}>{statusOptions.find(o => o.value === status)?.label ?? status}</Tag>;
+                }
+                return (
+                    <Select
+                        value={status}
+                        onChange={(value) => handleStatusChange(record.id, value)}
+                        style={{ width: '100%' }}
+                        size="small"
+                    >
+                        {statusOptions.slice(1).filter(opt => legalNext.includes(opt.value)).map(opt => (
+                            <Select.Option key={opt.value} value={opt.value}>
+                                <Tag color={getStatusColor(opt.value)} style={{ margin: 0 }}>
+                                    {opt.label}
+                                </Tag>
+                            </Select.Option>
+                        ))}
+                    </Select>
+                );
+            },
         },
         {
             title: 'Actions',
@@ -184,9 +210,9 @@ const AdminAppointments = () => {
         const all = appointments.length;
         return {
             total: all,
-            pending: appointments.filter(a => a.status === 'pending').length,
-            completed: appointments.filter(a => a.status === 'Completed').length,
-            cancelled: appointments.filter(a => a.status === 'cancel').length,
+            pending: appointments.filter(a => a.status === 'PENDING').length,
+            completed: appointments.filter(a => a.status === 'COMPLETED').length,
+            cancelled: appointments.filter(a => ['DECLINED', 'CANCELLED_BY_PATIENT', 'CANCELLED_BY_DOCTOR', 'CANCELLED_BY_ADMIN'].includes(a.status)).length,
         };
     }, [appointments]);
 

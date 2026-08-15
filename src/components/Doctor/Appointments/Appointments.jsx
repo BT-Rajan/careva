@@ -48,9 +48,9 @@ const Appointments = () => {
     const stats = useMemo(() => {
         return {
             total: appointments.length,
-            pending: appointments.filter(a => a.status === 'pending').length,
+            pending: appointments.filter(a => a.status === 'PENDING').length,
             today: appointments.filter(a => moment(a.scheduleDate).isSame(moment(), 'day')).length,
-            completed: appointments.filter(a => a.status === 'Completed').length,
+            completed: appointments.filter(a => a.status === 'COMPLETED').length,
         };
     }, [appointments]);
 
@@ -123,10 +123,15 @@ const Appointments = () => {
             key: 'status',
             render: (status) => {
                 const colors = {
-                    pending: 'gold',
-                    scheduled: 'blue',
-                    Completed: 'green',
-                    cancel: 'red',
+                    PENDING: 'gold',
+                    SCHEDULED: 'blue',
+                    COMPLETED: 'green',
+                    DECLINED: 'red',
+                    CANCELLED_BY_PATIENT: 'red',
+                    CANCELLED_BY_DOCTOR: 'red',
+                    CANCELLED_BY_ADMIN: 'red',
+                    NO_SHOW: 'volcano',
+                    EXPIRED: 'default',
                 };
                 return <Tag color={colors[status] || 'default'}>{status}</Tag>;
             },
@@ -165,13 +170,13 @@ const Appointments = () => {
                             <Button type="primary" size="small">Prescription</Button>
                         </Link>
                     )}
-                    {record.status === 'pending' && (
+                    {record.status === 'PENDING' && (
                         <>
                             <Button
                                 type="primary"
                                 icon={<FaCheck />}
                                 size="small"
-                                onClick={() => handleStatusUpdate(record.id, 'scheduled')}
+                                onClick={() => handleStatusUpdate(record.id, 'SCHEDULED')}
                             >
                                 Accept
                             </Button>
@@ -179,7 +184,32 @@ const Appointments = () => {
                                 danger
                                 icon={<FaTimes />}
                                 size="small"
-                                onClick={() => handleStatusUpdate(record.id, 'cancel')}
+                                onClick={() => handleStatusUpdate(record.id, 'DECLINED')}
+                            >
+                                Decline
+                            </Button>
+                        </>
+                    )}
+                    {record.status === 'SCHEDULED' && (
+                        <>
+                            <Button
+                                type="primary"
+                                size="small"
+                                onClick={() => handleStatusUpdate(record.id, 'COMPLETED')}
+                            >
+                                Mark Completed
+                            </Button>
+                            <Button
+                                size="small"
+                                onClick={() => handleStatusUpdate(record.id, 'NO_SHOW')}
+                            >
+                                No-Show
+                            </Button>
+                            <Button
+                                danger
+                                icon={<FaTimes />}
+                                size="small"
+                                onClick={() => handleStatusUpdate(record.id, 'CANCELLED_BY_DOCTOR')}
                             >
                                 Cancel
                             </Button>
@@ -241,10 +271,13 @@ const Appointments = () => {
                         allowClear
                         options={[
                             { label: 'All Status', value: null },
-                            { label: 'Pending', value: 'pending' },
-                            { label: 'Scheduled', value: 'scheduled' },
-                            { label: 'Completed', value: 'Completed' },
-                            { label: 'Cancelled', value: 'cancel' },
+                            { label: 'Pending', value: 'PENDING' },
+                            { label: 'Scheduled', value: 'SCHEDULED' },
+                            { label: 'Completed', value: 'COMPLETED' },
+                            { label: 'Declined', value: 'DECLINED' },
+                            { label: 'Cancelled by patient', value: 'CANCELLED_BY_PATIENT' },
+                            { label: 'Cancelled by doctor', value: 'CANCELLED_BY_DOCTOR' },
+                            { label: 'No-show', value: 'NO_SHOW' },
                         ]}
                     />
                     <RangePicker

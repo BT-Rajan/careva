@@ -1,4 +1,4 @@
-import { Appointments, Patient, Payment, paymentStatus, Prisma, PaymentStatus } from "@prisma/client";
+import { Appointments, Patient, Payment, paymentStatus, Prisma, PaymentStatus, AppointmentStatus } from "@prisma/client";
 import prisma from "../../../shared/prisma";
 import ApiError from "../../../errors/apiError";
 import httpStatus from "http-status";
@@ -9,6 +9,7 @@ import config from "../../../config";
 import { toMinorUnits } from "../../../shared/money";
 import { getProviderForCurrency } from "../payment/providers";
 import { PaymentService } from "../payment/payment.service";
+import { assertValidAppointmentTransition } from "./appointment-state-machine";
 
 // Pass 5 — Appointment & Slot Engine.
 //
@@ -67,7 +68,10 @@ const assertSlotAvailable = async (
             doctorId,
             scheduleDate,
             scheduleTime,
-            status: { not: 'cancel' }
+            // Pass 8: was `status: { not: 'cancel' }` — the old single lowercase string.
+            // Now excludes every cancel/decline-shaped terminal state, since any of them
+            // frees the seat back up.
+            status: { notIn: ['DECLINED', 'CANCELLED_BY_PATIENT', 'CANCELLED_BY_DOCTOR', 'CANCELLED_BY_ADMIN', 'EXPIRED'] }
         }
     });
     if (existingCount >= maximumPatient) {
@@ -593,14 +597,13 @@ const deleteAppointment = async (id: string): Promise<any> => {
     return result;
 }
 
-const updateAppointment = async (reqUser: any, id: string, payload: Partial<Appointments>): Promise<Appointments> => {
+const updateAppointment = async (reqUser: any, id: string, payload: Partial<Appointments> & { reason?: string }): Promise<Appointments> => {
     // Pass 4: previously no ownership check, and the full request body was passed
     // straight to Prisma (mass-assignment) — any authenticated patient/doctor could PATCH
     // ANY appointment with arbitrary fields (paymentStatus, doctorId, etc.), not just
     // their own. Confirmed via the frontend that every real caller (doctor Accept/Cancel
     // buttons, admin panel) only ever sends `{ status }`, so restricting to that field
-    // doesn't break anything live. Full transition-legality rules (which status can
-    // follow which) are Pass 8's job — this only controls WHO can act and WHAT field.
+    // doesn't break anything live.
     const appointment = await prisma.appointments.findUnique({ where: { id } });
     if (!appointment) {
         throw new ApiError(httpStatus.NOT_FOUND, 'Appointment is not found !!');
@@ -610,12 +613,42 @@ const updateAppointment = async (reqUser: any, id: string, payload: Partial<Appo
     if (!isAdmin && !isOwner) {
         throw new ApiError(httpStatus.FORBIDDEN, 'You are not allowed to update this appointment !!');
     }
-    const result = await prisma.appointments.update({
-        data: { status: payload.status },
-        where: {
-            id: id
-        }
-    })
+    if (!payload.status) {
+        throw new ApiError(httpStatus.BAD_REQUEST, 'status is required !!');
+    }
+    // Pass 8: the actual transition-legality + authorization check — who can move this
+    // appointment from its CURRENT status (read fresh above, not client-supplied) to the
+    // requested one. See appointment-state-machine.ts.
+    assertValidAppointmentTransition(appointment.status as AppointmentStatus, payload.status as AppointmentStatus, reqUser?.role);
+
+    const result = await prisma.$transaction(async (tx) => {
+        const updated = await tx.appointments.update({
+            data: {
+                status: payload.status,
+                statusChangedAt: new Date(),
+                statusChangedBy: reqUser?.userId,
+                statusChangeReason: payload.reason,
+            },
+            where: {
+                id: id
+            }
+        });
+        // Pass 2 built this table; Pass 8 is its first real writer — appointment status
+        // transitions are exactly the kind of business event Pass 1's invariant #3
+        // ("status changes only happen through defined transitions") calls for a durable
+        // record of, beyond the fast "latest transition" snapshot fields above.
+        await tx.auditLog.create({
+            data: {
+                actorId: reqUser?.userId,
+                actorRole: reqUser?.role,
+                action: 'appointment.status_changed',
+                entityType: 'Appointments',
+                entityId: id,
+                metadata: { from: appointment.status, to: payload.status, reason: payload.reason ?? null },
+            }
+        });
+        return updated;
+    });
     return result;
 }
 
@@ -718,12 +751,40 @@ const updateAppointmentByDoctor = async (user: any, payload: Partial<Appointment
         throw new ApiError(httpStatus.FORBIDDEN, 'You are not allowed to update this appointment !!');
     }
     const { status, prescriptionStatus, description, reasonForVisit } = payload;
-    const result = await prisma.appointments.update({
-        where: {
-            id: payload.id
-        },
-        data: { status, prescriptionStatus, description, reasonForVisit }
-    })
+    if (status) {
+        // Pass 8: same transition validation as the generic updateAppointment path —
+        // this endpoint is confirmed unused by the frontend today (Pass 4), but it's
+        // still a live route, and "no arbitrary status updates" applies regardless of
+        // which endpoint is used to attempt one.
+        assertValidAppointmentTransition(appointment.status as AppointmentStatus, status as AppointmentStatus, 'doctor');
+    }
+    const result = await prisma.$transaction(async (tx) => {
+        const updated = await tx.appointments.update({
+            where: {
+                id: payload.id
+            },
+            data: {
+                status,
+                prescriptionStatus,
+                description,
+                reasonForVisit,
+                ...(status ? { statusChangedAt: new Date(), statusChangedBy: userId } : {})
+            }
+        });
+        if (status) {
+            await tx.auditLog.create({
+                data: {
+                    actorId: userId,
+                    actorRole: 'doctor',
+                    action: 'appointment.status_changed',
+                    entityType: 'Appointments',
+                    entityId: payload.id as string,
+                    metadata: { from: appointment.status, to: status },
+                }
+            });
+        }
+        return updated;
+    });
     return result;
 }
 

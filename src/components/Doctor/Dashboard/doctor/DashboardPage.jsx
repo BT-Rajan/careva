@@ -21,8 +21,18 @@ const DashboardPage = () => {
 
 
     const updatedApppointmentStatus = (data, type) => {
+        // Pass 8: previously sent the literal strings 'accept'/'cancel' — 'accept' never
+        // matched any status value used anywhere else in the app (Doctor/Appointments/
+        // Appointments.jsx's equivalent button sent 'scheduled' for the same action), and
+        // 'cancel' was used for both "decline a pending request" and "cancel an already-
+        // scheduled appointment," two different states in the real state machine. Now
+        // sends the actual target AppointmentStatus enum value, matching Pass 4's
+        // context-aware Cancel button in Doctor/Appointments/Appointments.jsx.
+        const target = type === 'accept'
+            ? 'SCHEDULED'
+            : data.status === 'PENDING' ? 'DECLINED' : 'CANCELLED_BY_DOCTOR';
         const changeObj = {
-            status: type
+            status: target
         }
         if (data.id) {
             updateAppointment({ id: data.id, data: changeObj })
@@ -102,7 +112,7 @@ const DashboardPage = () => {
                                 </Link>
                         }
                         {
-                            data?.status === 'pending' &&
+                            data?.status === 'PENDING' &&
                             <>
                                 <Button type="primary" icon={<FaCheck />} size="small" onClick={() => updatedApppointmentStatus(data, 'accept')}>Accept</Button>
                                 <Button type='primary' icon={<FaTimes />} size='small' danger onClick={() => updatedApppointmentStatus(data, 'cancel')}>Cancel</Button>

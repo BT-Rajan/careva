@@ -28,8 +28,8 @@ const AdminDashboard = () => {
         return sum + amount;
     }, 0);
 
-    const pendingAppointments = appointments.filter(a => a.status === 'pending').length;
-    const completedAppointments = appointments.filter(a => a.status === 'Completed').length;
+    const pendingAppointments = appointments.filter(a => a.status === 'PENDING').length;
+    const completedAppointments = appointments.filter(a => a.status === 'COMPLETED').length;
 
     const last7DaysAppointments = appointments.filter(apt => {
         const aptDate = moment(apt.createdAt);
@@ -38,9 +38,9 @@ const AdminDashboard = () => {
 
     const appointmentsByStatus = [
         { name: 'Pending', value: pendingAppointments },
-        { name: 'Scheduled', value: appointments.filter(a => a.status === 'scheduled').length },
+        { name: 'Scheduled', value: appointments.filter(a => a.status === 'SCHEDULED').length },
         { name: 'Completed', value: completedAppointments },
-        { name: 'Cancelled', value: appointments.filter(a => a.status === 'cancel').length },
+        { name: 'Cancelled', value: appointments.filter(a => ['DECLINED', 'CANCELLED_BY_PATIENT', 'CANCELLED_BY_DOCTOR', 'CANCELLED_BY_ADMIN'].includes(a.status)).length },
     ].filter(item => item.value > 0);
 
     const last7Days = Array.from({ length: 7 }, (_, i) => {
