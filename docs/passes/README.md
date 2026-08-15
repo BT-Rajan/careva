@@ -11,7 +11,7 @@ at a time, in order. Each pass is committed and pushed on completion.
 | 4 | Authorization & RBAC | ✅ Complete |
 | 5 | Appointment & Slot Engine | ✅ Complete |
 | 6 | Booking Transaction | ✅ Complete |
-| 7 | Payment System | ⏳ Not started |
+| 7 | Payment System | ✅ Complete (backend; frontend checkout UI deferred — see doc) |
 | 8 | Appointment State Machine | ⏳ Not started |
 | 9 | Cancellation & Rescheduling | ⏳ Not started |
 | 10 | Doctor Lifecycle | ⏳ Not started |

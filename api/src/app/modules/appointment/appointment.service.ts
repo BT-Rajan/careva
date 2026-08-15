@@ -1,4 +1,4 @@
-import { Appointments, Patient, Payment, paymentStatus, Prisma } from "@prisma/client";
+import { Appointments, Patient, Payment, paymentStatus, Prisma, PaymentStatus } from "@prisma/client";
 import prisma from "../../../shared/prisma";
 import ApiError from "../../../errors/apiError";
 import httpStatus from "http-status";
@@ -6,6 +6,9 @@ import moment from 'moment';
 import { EmailtTransporter } from "../../../helpers/emailTransporter";
 import * as path from 'path';
 import config from "../../../config";
+import { toMinorUnits } from "../../../shared/money";
+import { getProviderForCurrency } from "../payment/providers";
+import { PaymentService } from "../payment/payment.service";
 
 // Pass 5 — Appointment & Slot Engine.
 //
@@ -166,7 +169,11 @@ const createAppointment = async (payload: any, idempotencyKey?: string): Promise
     if (!isDoctorExist) {
         throw new ApiError(httpStatus.NOT_FOUND, 'Doctor Account is not found !!')
     }
-    patientInfo['paymentStatus'] = paymentStatus.paid;
+    // Pass 7 — Payment System: previously set to 'paid' unconditionally right here, before
+    // any gateway was ever involved (Gap G6, docs/passes/01-domain-state-model.md). Now
+    // left at its schema default ('unpaid') and only flipped to 'paid' by
+    // payment.service.ts's verifyAndFinalizePayment, once a real gateway has confirmed
+    // the payment — see PaymentService.createProviderOrderForPayment below.
   
     const result = await runBookingTransaction(async (tx) => {
         // Pass 6: if this exact booking attempt already succeeded (same Idempotency-Key),
@@ -201,18 +208,31 @@ const createAppointment = async (payload: any, idempotencyKey?: string): Promise
             }
         });
         const { paymentMethod, paymentType } = payment;
-        const docFee = Number(isDoctorExist.price);
-        const vat = (15 / 100) * (docFee + 10)
+        const currency = isDoctorExist.currency;
+        // Pass 7: amounts are now stored in minor units (paise/fils) — see
+        // api/src/shared/money.ts. Doctor.price is still a human decimal string
+        // ("60.50"), converted here at the point of charge.
+        const docFeeMinor = toMinorUnits(isDoctorExist.price ?? '0', currency);
+        const bookingFeeMinor = toMinorUnits(10, currency);
+        const vatMinor = Math.round(0.15 * (docFeeMinor + bookingFeeMinor));
+        // BUG FIX (Pass 7): totalAmount previously omitted bookingFee entirely
+        // (`vat + docFee`, no bookingFee) — a patient was charged less than the sum of
+        // the line items shown. Now the true sum of all three.
+        const totalAmountMinor = docFeeMinor + bookingFeeMinor + vatMinor;
+        let createdPayment: Payment | null = null;
         if (appointment.id) {
-            await tx.payment.create({
+            createdPayment = await tx.payment.create({
                 data: {
                     appointmentId: appointment.id,
-                    bookingFee: 10,
+                    bookingFee: bookingFeeMinor,
                     paymentMethod: paymentMethod,
                     paymentType: paymentType,
-                    vat: vat,
-                    DoctorFee: docFee,
-                    totalAmount: (vat + docFee),
+                    vat: vatMinor,
+                    DoctorFee: docFeeMinor,
+                    totalAmount: totalAmountMinor,
+                    status: PaymentStatus.PENDING,
+                    provider: getProviderForCurrency(currency).name,
+                    currency: currency,
                 }
             })
         }
@@ -254,13 +274,36 @@ const createAppointment = async (payload: any, idempotencyKey?: string): Promise
         // retry/delivery-tracking is Pass 16's job (Notifications) — this only stops it
         // from being able to take the server down.
         EmailtTransporter({ pathName, replacementObj, toMail, subject }).catch((err) => console.error('Failed to send appointment confirmation email:', err));
-        await recordIdempotentResponse(tx, idempotencyKey, appointment);
-        return appointment;
+        // Pass 7: payment is nested onto the same object rather than restructuring the
+        // response envelope — the existing frontend reads appointment fields (id,
+        // trackingId, etc.) directly off the top level of this response, and the spread
+        // here keeps that working unchanged while adding payment/checkout info alongside.
+        const appointmentWithPayment = { ...appointment, payment: createdPayment };
+        await recordIdempotentResponse(tx, idempotencyKey, appointmentWithPayment);
+        return appointmentWithPayment;
     });
+    // Pass 7: gateway order creation happens AFTER the transaction commits, not inside
+    // it — see the design note at the top of payment.service.ts for why. Idempotent
+    // either way (fresh booking or an idempotency-key replay both land here with a real
+    // payment.id), so calling it unconditionally is safe and self-healing if a previous
+    // attempt got this far but didn't finish (e.g. process restart between transaction
+    // commit and gateway call).
+    if (result?.payment?.id) {
+        try {
+            const checkout = await PaymentService.createProviderOrderForPayment(result.payment.id);
+            result.checkout = checkout;
+        } catch (error) {
+            // Booking itself is NOT lost — the appointment and a PENDING payment record
+            // exist regardless. The frontend/patient can retry via
+            // POST /payment/:paymentId/checkout (see payment.route.ts) once whatever
+            // caused this (bad gateway credentials, network blip) is resolved.
+            console.error('Failed to create payment gateway order for appointment', result.id, error);
+        }
+    }
     return result;
 }
 
-const createAppointmentByUnAuthenticateUser = async (payload: any, idempotencyKey?: string): Promise<Appointments | null> => {
+const createAppointmentByUnAuthenticateUser = async (payload: any, idempotencyKey?: string): Promise<any> => {
     const { patientInfo, payment } = payload;
     if(patientInfo.patientId){
         const isUserExist = await prisma.patient.findUnique({
@@ -298,7 +341,11 @@ const createAppointmentByUnAuthenticateUser = async (payload: any, idempotencyKe
         if (!doctorForFee) {
             throw new ApiError(httpStatus.NOT_FOUND, 'Doctor Account is not found !!');
         }
-        const docFee = doctorForFee.price != null ? Number(doctorForFee.price) : 60;
+        const currency = doctorForFee.currency;
+        // Pass 7: minor units — see api/src/shared/money.ts. Preserves the existing
+        // "60" fallback for a doctor with no price set, now run through the same
+        // currency-aware conversion as everywhere else instead of being a bare number.
+        const docFeeMinor = toMinorUnits(doctorForFee.price ?? '60', currency);
 
         // Pass 5: same check as the authenticated path — must run before the insert,
         // inside this transaction. See assertSlotAvailable above.
@@ -308,17 +355,25 @@ const createAppointmentByUnAuthenticateUser = async (payload: any, idempotencyKe
             data: patientInfo,
         });
         const { paymentMethod, paymentType } = payment;
-        const vat = (15 / 100) * (docFee + 10);
+        const bookingFeeMinor = toMinorUnits(10, currency);
+        const vatMinor = Math.round(0.15 * (docFeeMinor + bookingFeeMinor));
+        // BUG FIX (Pass 7): same totalAmount fix as the authenticated path — previously
+        // omitted bookingFee.
+        const totalAmountMinor = docFeeMinor + bookingFeeMinor + vatMinor;
+        let createdPayment: Payment | null = null;
         if (appointment.id) {
-            await tx.payment.create({
+            createdPayment = await tx.payment.create({
                 data: {
                     appointmentId: appointment.id,
-                    bookingFee: 10,
+                    bookingFee: bookingFeeMinor,
                     paymentMethod: paymentMethod,
                     paymentType: paymentType,
-                    vat: vat,
-                    DoctorFee: docFee,
-                    totalAmount: (vat + docFee),
+                    vat: vatMinor,
+                    DoctorFee: docFeeMinor,
+                    totalAmount: totalAmountMinor,
+                    status: PaymentStatus.PENDING,
+                    provider: getProviderForCurrency(currency).name,
+                    currency: currency,
                 }
             })
         }
@@ -341,10 +396,22 @@ const createAppointmentByUnAuthenticateUser = async (payload: any, idempotencyKe
         // Pass 6: same reasoning as the authenticated path above — email failure must
         // never crash the process or block the booking.
         EmailtTransporter({ pathName, replacementObj, toMail, subject }).catch((err) => console.error('Failed to send guest appointment confirmation email:', err));
-        await recordIdempotentResponse(tx, idempotencyKey, appointment);
-        return appointment;
+        const appointmentWithPayment = { ...appointment, payment: createdPayment };
+        await recordIdempotentResponse(tx, idempotencyKey, appointmentWithPayment);
+        return appointmentWithPayment;
     })
 
+    // Pass 7: see the identical comment in createAppointment above — gateway order
+    // creation happens after commit, is idempotent, and a failure here doesn't lose the
+    // underlying booking.
+    if (result?.payment?.id) {
+        try {
+            const checkout = await PaymentService.createProviderOrderForPayment(result.payment.id);
+            result.checkout = checkout;
+        } catch (error) {
+            console.error('Failed to create payment gateway order for guest appointment', result.id, error);
+        }
+    }
     return result;
 }
 

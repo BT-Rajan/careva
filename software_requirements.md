@@ -15,6 +15,7 @@ Careva no longer targets Vercel or Docker. Deployment is native Node.js on the h
 | **Database** | PostgreSQL, accessed via Prisma ORM | external (self-hosted or managed) |
 | **File storage** | Cloudinary (profile photos, uploaded content) | external service |
 | **Email** | Gmail SMTP via an App Password (password resets, verification, notifications) | external service |
+| **Payments** | Razorpay (India / INR) and Telr (Kuwait / KWD) — selected per-doctor via `Doctor.currency` | external services |
 
 ---
 
@@ -40,8 +41,10 @@ These are **not software installs**, but the app will not function fully without
 | **PostgreSQL database** | Primary data store | Both frontend (indirectly) and API (directly) |
 | **Cloudinary account** | Image upload/hosting (doctor photos, profile pictures, blog images) | API |
 | **Gmail account + App Password** | Sends transactional emails (verification, password reset, appointment notifications) | API |
+| **Razorpay account** (test or live) | Payment processing for India-based doctors (INR) | API |
+| **Telr merchant account** (test or live) | Payment processing for Kuwait-based doctors (KWD) | API |
 
-If you skip Cloudinary/Gmail setup, the app will still run, but image uploads and email flows will fail at runtime.
+If you skip Cloudinary/Gmail setup, the app will still run, but image uploads and email flows will fail at runtime. If you skip the payment gateway setup, bookings will still be created, but will sit in a `PENDING` payment state with no way to actually collect payment through the current UI — see `docs/passes/07-payment-system.md` §7 for what's still needed to wire up a real checkout flow.
 
 ---
 
@@ -79,6 +82,9 @@ If you skip Cloudinary/Gmail setup, the app will still run, but image uploads an
 | `DOCTOR_PASS` / `PATIENT_PASS` | Default seed passwords used by some flows |
 | `CLOUND_NAME`, `API_KEY`, `API_SECRET` | Cloudinary credentials |
 | `EMAIL_PASS` | Gmail App Password |
+| `BACKEND_ORIGIN`, `BACKEND_ORIGIN_LOCAL` | Backend origin only (no path) — builds payment gateway return/webhook URLs |
+| `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET` | Razorpay (India) credentials |
+| `TELR_STORE_ID`, `TELR_AUTH_KEY`, `TELR_TEST_MODE` | Telr (Kuwait) credentials |
 | `ADMIN_EMAIL`, `GMAIL_APP_EMAIL` | Sender/admin addresses used for outgoing mail |
 | `BACKEND_LOCAL_URL` | Local API base + `/api/v1/auth/` (used in email links during dev) |
 | `BACKEND_LIVE_URL` | Production API base + `/api/v1/auth/` (used in email links in production) |
@@ -101,6 +107,8 @@ Before deploying, make sure you have:
 - [ ] A PostgreSQL database (connection string ready)
 - [ ] A Cloudinary account and API credentials
 - [ ] A Gmail account with an App Password generated
+- [ ] A Razorpay account (India/INR bookings)
+- [ ] A Telr merchant account (Kuwait/KWD bookings)
 - [ ] Git installed and the repository cloned
 
 See `DEPLOYMENT.md` for the exact commands on Windows and Linux.

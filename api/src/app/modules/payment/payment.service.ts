@@ -1,0 +1,283 @@
+/**
+ * Pass 7 — Payment System.
+ *
+ * Design note on why gateway calls happen OUTSIDE the booking transaction: calling an
+ * external HTTP API (the payment gateway) from inside a SERIALIZABLE database
+ * transaction is a well-known anti-pattern — it holds locks open for the duration of a
+ * network call, and if the transaction later has to roll back for an unrelated reason,
+ * you're left with a real-world gateway order that has no matching local record. Instead:
+ * the booking transaction (appointment.service.ts, Pass 5/6) creates the Appointment and
+ * a Payment row in PENDING status with no provider order yet; createProviderOrderForPayment
+ * below is a separate, idempotent step (safe to call again — see its own comment) that
+ * creates the actual gateway order afterward. If that step fails or is interrupted
+ * (network blip, server restart), the booking itself is NOT lost — it's retried via the
+ * same idempotent function, not by re-running the whole booking.
+ */
+import { Currency, Payment, PaymentStatus } from '@prisma/client';
+import prisma from '../../../shared/prisma';
+import ApiError from '../../../errors/apiError';
+import httpStatus from 'http-status';
+import { getProviderForCurrency, getProviderByName } from './providers';
+import { toMinorUnits } from '../../../shared/money';
+
+/**
+ * Idempotent: if this Payment already has a providerOrderId, returns the existing order
+ * info instead of calling the gateway again. Safe to call repeatedly (double-click on
+ * "pay now," a retry after a timeout, or as a deliberate "resume payment" action).
+ */
+const createProviderOrderForPayment = async (paymentId: string): Promise<{ providerOrderId: string; redirectUrl: string | null; provider: string }> => {
+    const payment = await prisma.payment.findUnique({
+        where: { id: paymentId },
+        include: { appointment: { include: { doctor: true } } }
+    });
+    if (!payment) {
+        throw new ApiError(httpStatus.NOT_FOUND, 'Payment record is not found !!');
+    }
+
+    if (payment.providerOrderId) {
+        // Already created — return what exists rather than creating a duplicate gateway
+        // order. Telr's redirectUrl isn't stored (only the ref is durable/reusable data;
+        // the URL itself is reconstructable), so for a Telr repeat-call we rebuild it the
+        // same way Telr's own docs describe (process.html?o=<ref>); for Razorpay there is
+        // no redirect URL at all (checkout widget uses the order id directly).
+        const provider = getProviderByName(payment.provider);
+        const redirectUrl = provider.name === 'telr' ? `https://secure.telr.com/gateway/process.html?o=${payment.providerOrderId}` : null;
+        return { providerOrderId: payment.providerOrderId, redirectUrl, provider: payment.provider };
+    }
+
+    if (payment.status !== PaymentStatus.PENDING) {
+        throw new ApiError(httpStatus.CONFLICT, `Cannot create a payment order for a payment in ${payment.status} status !!`);
+    }
+
+    const provider = getProviderForCurrency(payment.currency);
+    const appointment = payment.appointment;
+    const doctorName = `${appointment.doctor.firstName} ${appointment.doctor.lastName}`;
+
+    const order = await provider.createOrder({
+        paymentId: payment.id,
+        amountMinor: payment.totalAmount,
+        currency: payment.currency,
+        description: `Appointment with Dr ${doctorName}`,
+        customerName: appointment.firstName && appointment.lastName ? `${appointment.firstName} ${appointment.lastName}` : undefined,
+        customerEmail: appointment.email ?? undefined,
+        customerPhone: appointment.phone ?? undefined,
+    });
+
+    await prisma.payment.update({
+        where: { id: payment.id },
+        data: {
+            providerOrderId: order.providerOrderId,
+            status: PaymentStatus.PROCESSING,
+        }
+    });
+
+    return { providerOrderId: order.providerOrderId, redirectUrl: order.redirectUrl, provider: payment.provider };
+}
+
+/**
+ * Server-side verification of a payment — called either from a browser-return handler
+ * (Telr) or from a frontend-submitted checkout callback (Razorpay). "Never trust the
+ * browser as proof of payment": this always re-verifies against the gateway (signature
+ * check for Razorpay, a direct status query for Telr) rather than trusting whatever the
+ * request claims.
+ */
+const verifyAndFinalizePayment = async (paymentId: string, payload: Record<string, any>): Promise<Payment> => {
+    const payment = await prisma.payment.findUnique({ where: { id: paymentId } });
+    if (!payment) {
+        throw new ApiError(httpStatus.NOT_FOUND, 'Payment record is not found !!');
+    }
+    // Terminal states don't get re-verified into a different outcome — a second
+    // verification call on an already-SUCCEEDED payment is a no-op, not a re-trigger.
+    if (payment.status === PaymentStatus.SUCCEEDED || payment.status === PaymentStatus.REFUNDED) {
+        return payment;
+    }
+
+    const provider = getProviderByName(payment.provider);
+    const result = await provider.verifyPayment({ payload });
+
+    if (!result.success) {
+        const updated = await prisma.payment.update({
+            where: { id: payment.id },
+            data: { status: PaymentStatus.FAILED, failureReason: result.failureReason ?? 'Verification failed' }
+        });
+        return updated;
+    }
+
+    // Amount check: signature/status being valid proves the callback is authentic, not
+    // that the amount matches what was expected. A gateway confirming a DIFFERENT amount
+    // than what was requested is treated as unresolved, not silently accepted.
+    if (result.amountMinor !== undefined && result.amountMinor !== payment.totalAmount) {
+        const updated = await prisma.payment.update({
+            where: { id: payment.id },
+            data: {
+                status: PaymentStatus.UNKNOWN_RECONCILING,
+                providerPaymentId: result.providerPaymentId,
+                providerSignature: result.providerSignature,
+                failureReason: `Amount mismatch: expected ${payment.totalAmount}, gateway confirmed ${result.amountMinor}`
+            }
+        });
+        return updated;
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+        const p = await tx.payment.update({
+            where: { id: payment.id },
+            data: {
+                status: PaymentStatus.SUCCEEDED,
+                providerPaymentId: result.providerPaymentId,
+                providerSignature: result.providerSignature,
+            }
+        });
+        // This is what Appointments.paymentStatus 'paid' should have meant all along
+        // (Gap G6, docs/passes/01-domain-state-model.md) — set only once a gateway has
+        // actually confirmed the payment, not unconditionally at booking time.
+        await tx.appointments.update({
+            where: { id: payment.appointmentId },
+            data: { paymentStatus: 'paid' }
+        });
+        return p;
+    });
+    return updated;
+}
+
+/**
+ * Inbound webhook handler. rawBody must be the raw request body string (see
+ * payment.route.ts's use of express.raw() for these two routes specifically). Idempotent
+ * via the PaymentWebhookEvent unique constraint on (provider, providerEventId) — a
+ * gateway retrying the same notification hits that constraint and is safely ignored.
+ */
+const handleWebhook = async (providerName: 'razorpay' | 'telr', rawBody: string, headers: Record<string, string | string[] | undefined>): Promise<{ status: string }> => {
+    const provider = getProviderByName(providerName);
+    const verification = provider.verifyWebhookSignature(rawBody, headers);
+    if (!verification.valid) {
+        // For Telr specifically, this is EXPECTED to always be the outcome today — see
+        // telr.provider.ts's comment. This isn't treated as an error for Telr; Telr
+        // confirmation goes through the return_auth/return_decl/return_can routes calling
+        // verifyAndFinalizePayment instead. For Razorpay, an invalid signature is a real
+        // rejection (someone forging a webhook, or a misconfigured secret).
+        if (providerName === 'razorpay') {
+            throw new ApiError(httpStatus.UNAUTHORIZED, 'Invalid webhook signature !!');
+        }
+        return { status: 'ignored' };
+    }
+
+    const providerEventId = verification.providerEventId ?? `${providerName}-${Date.now()}-${Math.random()}`;
+
+    // The actual idempotency enforcement — see the model comment in schema.prisma.
+    const existing = await prisma.paymentWebhookEvent.findUnique({
+        where: { provider_providerEventId: { provider: providerName, providerEventId } }
+    });
+    if (existing) {
+        return { status: 'already_processed' };
+    }
+
+    let parsed: any;
+    try {
+        parsed = JSON.parse(rawBody);
+    } catch {
+        throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid webhook body !!');
+    }
+
+    await prisma.paymentWebhookEvent.create({
+        data: {
+            provider: providerName,
+            providerEventId,
+            eventType: verification.eventType ?? 'unknown',
+            payload: parsed,
+        }
+    });
+
+    // Razorpay's payload nests entity data under payload.payment.entity — see
+    // payload.contains for which entities are present per event type. The webhook
+    // signature check above already authenticates this payload — unlike
+    // verifyAndFinalizePayment (used for the browser-return/checkout-callback path),
+    // there's no separate razorpay_signature to re-check here, so this updates Payment
+    // and Appointments directly rather than routing through that function (which expects
+    // and requires a checkout-style signature that webhook payloads don't carry).
+    if (providerName === 'razorpay') {
+        const paymentEntity = parsed?.payload?.payment?.entity;
+        const paymentIdFromNotes = paymentEntity?.notes?.paymentId;
+        if (paymentIdFromNotes && parsed.event === 'payment.captured') {
+            const payment = await prisma.payment.findUnique({ where: { id: paymentIdFromNotes } });
+            if (payment && payment.status !== PaymentStatus.SUCCEEDED && payment.status !== PaymentStatus.REFUNDED) {
+                if (paymentEntity.amount !== payment.totalAmount) {
+                    await prisma.payment.update({
+                        where: { id: paymentIdFromNotes },
+                        data: {
+                            status: PaymentStatus.UNKNOWN_RECONCILING,
+                            providerPaymentId: paymentEntity.id,
+                            failureReason: `Webhook amount mismatch: expected ${payment.totalAmount}, got ${paymentEntity.amount}`
+                        }
+                    });
+                } else {
+                    await prisma.$transaction(async (tx) => {
+                        await tx.payment.update({
+                            where: { id: paymentIdFromNotes },
+                            data: { status: PaymentStatus.SUCCEEDED, providerPaymentId: paymentEntity.id }
+                        });
+                        await tx.appointments.update({
+                            where: { id: payment.appointmentId },
+                            data: { paymentStatus: 'paid' }
+                        });
+                    });
+                }
+            }
+        }
+    }
+
+    await prisma.paymentWebhookEvent.update({
+        where: { provider_providerEventId: { provider: providerName, providerEventId } },
+        data: { processedAt: new Date() }
+    });
+
+    return { status: 'processed' };
+}
+
+const refundPayment = async (reqUser: any, paymentId: string, amountMinor: number, reason?: string): Promise<Payment> => {
+    if (reqUser?.role !== 'admin') {
+        throw new ApiError(httpStatus.FORBIDDEN, 'Only an admin can issue a refund !!');
+    }
+    const payment = await prisma.payment.findUnique({ where: { id: paymentId } });
+    if (!payment) {
+        throw new ApiError(httpStatus.NOT_FOUND, 'Payment record is not found !!');
+    }
+    if (payment.status !== PaymentStatus.SUCCEEDED && payment.status !== PaymentStatus.PARTIALLY_REFUNDED) {
+        throw new ApiError(httpStatus.CONFLICT, `Cannot refund a payment in ${payment.status} status !!`);
+    }
+    if (!payment.providerPaymentId) {
+        throw new ApiError(httpStatus.CONFLICT, 'Payment has no gateway reference to refund against !!');
+    }
+    const alreadyRefunded = payment.refundedAmount ?? 0;
+    if (alreadyRefunded + amountMinor > payment.totalAmount) {
+        throw new ApiError(httpStatus.BAD_REQUEST, 'Refund amount exceeds remaining refundable balance !!');
+    }
+
+    const provider = getProviderByName(payment.provider);
+    const result = await provider.refund({
+        providerPaymentId: payment.providerPaymentId,
+        amountMinor,
+        currency: payment.currency,
+        reason,
+    });
+
+    if (!result.success) {
+        throw new ApiError(httpStatus.BAD_GATEWAY, `Refund failed: ${result.failureReason ?? 'unknown gateway error'}`);
+    }
+
+    const newRefundedTotal = alreadyRefunded + amountMinor;
+    const updated = await prisma.payment.update({
+        where: { id: payment.id },
+        data: {
+            refundedAmount: newRefundedTotal,
+            status: newRefundedTotal >= payment.totalAmount ? PaymentStatus.REFUNDED : PaymentStatus.PARTIALLY_REFUNDED,
+        }
+    });
+    return updated;
+}
+
+export const PaymentService = {
+    createProviderOrderForPayment,
+    verifyAndFinalizePayment,
+    handleWebhook,
+    refundPayment,
+}

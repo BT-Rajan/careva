@@ -42,3 +42,19 @@ export const verifyEmailRateLimiter = rateLimit({
     legacyHeaders: false,
     message: { success: false, message: 'Too many verification attempts. Please try again later.' }
 });
+
+/**
+ * Pass 7 — Payment System. Webhook endpoints are unauthenticated by necessity (the
+ * gateway calls them directly, not a logged-in user) — signature verification is the
+ * real defense, but rate limiting adds a cheap extra layer against anything trying to
+ * flood the endpoint before a signature is even checked. Deliberately generous: real
+ * gateways can legitimately send bursts of webhooks (e.g. catching up after an outage),
+ * so this should not be tight enough to cause Careva to reject legitimate gateway retries.
+ */
+export const paymentWebhookRateLimiter = rateLimit({
+    windowMs: 5 * 60 * 1000,
+    limit: 100,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { success: false, message: 'Too many webhook requests.' }
+});

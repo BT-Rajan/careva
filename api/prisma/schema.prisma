@@ -117,6 +117,12 @@ model Doctor {
   expericenceStart       String?
   expericenceEnd         String?
   verified               Boolean?         @default(false)
+  // Pass 7 — Payment System. Determines which regional payment gateway handles bookings
+  // with this doctor: INR → Razorpay, KWD → Telr. Defaults to INR since that was the
+  // implicit assumption everywhere before this pass (no currency concept existed at all).
+  // Existing doctors need this set explicitly post-migration if any are actually
+  // Kuwait-based — a default can't know that.
+  currency               Currency         @default(INR)
   createdAt              DateTime         @default(now())
   updatedAt              DateTime         @updatedAt
   /// Soft-delete scaffold (Pass 2). Not yet wired into service code — hard `delete()`
@@ -185,10 +191,35 @@ model Payment {
   paymentMethod String
   paymentType   String
 
+  // Pass 7 — Payment System. Previously this model had no status field at all, and
+  // Appointments.paymentStatus was set to 'paid' unconditionally at booking time before
+  // any gateway was even involved (Gap G6, docs/passes/01-domain-state-model.md) — this
+  // is the real lifecycle. Matches the target model laid out in Pass 1 §4.3.
+  status   PaymentStatus   @default(PENDING)
+  provider PaymentProvider
+  currency Currency
+
+  // DoctorFee/bookingFee/vat/totalAmount are now MINOR units (paise for INR — ×100;
+  // fils for KWD — ×1000), not whole currency units, to avoid floating-point amounts and
+  // to correctly represent KWD's 3-decimal-place currency. See api/src/shared/money.ts.
   DoctorFee   Int
   bookingFee  Int
   vat         Int?
   totalAmount Int
+
+  // Gateway correlation. providerOrderId is set when a gateway order/session is created
+  // (before the user pays); providerPaymentId is set once the gateway confirms an actual
+  // payment attempt against that order — @unique because two Payment rows must never
+  // both claim the same real-world gateway transaction.
+  providerOrderId   String?
+  providerPaymentId String? @unique
+  // Raw signature/reference used for verification, kept for audit — never used as the
+  // sole basis for trusting a payment; verification always re-derives and compares.
+  providerSignature String?
+  failureReason     String?
+  // Running total refunded, in the same minor units as totalAmount. Compared against
+  // totalAmount to distinguish REFUNDED (full) from PARTIALLY_REFUNDED.
+  refundedAmount    Int?
 
   // Payment records had no timestamps at all prior to Pass 2 — no way to tell when a
   // payment was recorded or last touched. Added for audit-trail purposes; full financial
@@ -199,7 +230,32 @@ model Payment {
   /// is Pass 14's job.
   deletedAt DateTime?
 
+  @@index([status])
+  @@index([providerOrderId])
   @@map("Payment")
+}
+
+// Pass 7 — Payment System. Stores every inbound webhook/notification from a payment
+// gateway, raw, before any processing. The @@unique below is the actual mechanism that
+// makes webhook processing idempotent: a gateway retrying a notification (both Razorpay
+// and Telr do this on anything other than a clean success response) hits this constraint
+// on the retry and is safely recognized as already-seen rather than reprocessed.
+model PaymentWebhookEvent {
+  id              String          @id @default(uuid())
+  provider        PaymentProvider
+  // The gateway's own event/notification identifier (Razorpay: x-razorpay-event-id
+  // header. Telr has no confirmed equivalent from the sources available while building
+  // this — see docs/passes/07-payment-system.md — so the Telr path constructs a
+  // synthetic id from the order ref + status instead of a true gateway-issued event id;
+  // flagged there as needing verification against Telr's own docs).
+  providerEventId String
+  eventType       String
+  payload         Json
+  processedAt     DateTime?
+  createdAt       DateTime        @default(now())
+
+  @@unique([provider, providerEventId])
+  @@map("PaymentWebhookEvent")
 }
 
 model Reviews {
@@ -397,4 +453,35 @@ enum prescriptionStatus {
 enum paymentStatus {
   paid
   unpaid
+}
+
+// Pass 7 — Payment System. India and Kuwait are Careva's two markets. KWD is a
+// 3-decimal-place currency (1000 fils = 1 KWD) — see api/src/shared/money.ts for why
+// that matters for how amounts are stored.
+enum Currency {
+  INR
+  KWD
+}
+
+enum PaymentProvider {
+  razorpay
+  telr
+}
+
+// Pass 7 — Payment System. The target lifecycle from docs/passes/01-domain-state-model.md
+// §4.3, now actually implemented rather than just specified.
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+  EXPIRED
+  REFUNDED
+  PARTIALLY_REFUNDED
+  // Set when a webhook and a server-side verification call disagree, or when a gateway
+  // call errors in a way that leaves the real state unknown (e.g. timeout after the
+  // request may have already been processed gateway-side). Never silently resolved to a
+  // guess — see payment.service.ts reconcilePayment.
+  UNKNOWN_RECONCILING
 }

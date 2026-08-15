@@ -11,7 +11,19 @@ const app: Application = express();
 app.use(cors());
 app.use(CookieParser());
 
-app.use(express.json());
+// Pass 7 — Payment System: webhook signature verification (Razorpay, and any future
+// gateway that signs over the raw body) needs the EXACT raw bytes the gateway sent, not
+// a re-serialized version of the parsed object (JSON.stringify(parsed) is not guaranteed
+// to byte-for-byte match what was actually received — key ordering, whitespace, unicode
+// escaping can all differ). Capturing it here via express.json()'s verify callback, once,
+// globally, is simpler and less error-prone than trying to bypass the global JSON parser
+// per-route (which doesn't work anyway — express.json() below would already have
+// consumed the request stream by the time a route-level parser ran).
+app.use(express.json({
+    verify: (req: Request, _res: Response, buf: Buffer) => {
+        (req as any).rawBody = buf.toString('utf8');
+    }
+}));
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static('public'));
 
