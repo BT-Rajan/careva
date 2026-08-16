@@ -2,7 +2,7 @@ import React from 'react';
 import AdminLayout from '../AdminLayout/AdminLayout';
 import { Card, Row, Col, Table, Statistic, Empty, Spin } from 'antd';
 import { FaUserMd, FaUsers, FaCalendarCheck, FaDollarSign, FaArrowUp, FaArrowDown } from 'react-icons/fa';
-import { useGetDoctorsQuery } from '../../../redux/api/doctorApi';
+import { useGetDoctorsForAdminQuery } from '../../../redux/api/doctorApi';
 import { useGetAllAppointmentsQuery, useGetAllPatientsQuery } from '../../../redux/api/adminApi';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell } from 'recharts';
 import './Dashboard.css';
@@ -11,7 +11,7 @@ import moment from 'moment';
 const COLORS = ['#8b5cf6', '#f093fb', '#fad0c4', '#a8edea', '#fed6e3'];
 
 const AdminDashboard = () => {
-    const { data: doctorsData, isLoading: doctorsLoading } = useGetDoctorsQuery({ limit: 100 });
+    const { data: doctorsData, isLoading: doctorsLoading } = useGetDoctorsForAdminQuery({ limit: 100 });
     const { data: appointmentsData, isLoading: appointmentsLoading } = useGetAllAppointmentsQuery({ limit: 100 });
     const { data: patientsData, isLoading: patientsLoading } = useGetAllPatientsQuery({ limit: 100 });
 

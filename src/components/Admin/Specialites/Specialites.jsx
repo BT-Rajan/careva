@@ -3,7 +3,7 @@ import AdminLayout from '../AdminLayout/AdminLayout';
 import { Card, Table, Button, Modal, Form, Input, message, Space, Tag } from 'antd';
 import { FaPlus, FaEdit, FaTrash, FaStethoscope } from 'react-icons/fa';
 import { doctorSpecialistArray } from '../../../constant/global';
-import { useGetDoctorsQuery } from '../../../redux/api/doctorApi';
+import { useGetDoctorsForAdminQuery } from '../../../redux/api/doctorApi';
 import './Specialites.css';
 
 const Specialites = () => {
@@ -11,7 +11,7 @@ const Specialites = () => {
     const [editingSpecialty, setEditingSpecialty] = useState(null);
     const [form] = Form.useForm();
 
-    const { data: doctorsData } = useGetDoctorsQuery({ limit: 100 });
+    const { data: doctorsData } = useGetDoctorsForAdminQuery({ limit: 100 });
     const doctors = doctorsData?.doctors || [];
 
     const specialtiesWithCount = doctorSpecialistArray.map(spec => ({

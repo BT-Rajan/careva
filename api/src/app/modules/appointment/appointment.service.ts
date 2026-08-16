@@ -173,6 +173,13 @@ const createAppointment = async (payload: any, idempotencyKey?: string): Promise
     if (!isDoctorExist) {
         throw new ApiError(httpStatus.NOT_FOUND, 'Doctor Account is not found !!')
     }
+    // Pass 10 — Doctor Lifecycle: previously NOTHING checked approval status before
+    // allowing a booking — an admin-never-reviewed, or explicitly rejected/suspended,
+    // doctor was fully bookable. This is Pass 1's invariant #6 ("a doctor must be
+    // Approved/Active to be bookable"), finally enforced.
+    if (isDoctorExist.approvalStatus !== 'APPROVED') {
+        throw new ApiError(httpStatus.CONFLICT, 'This doctor is not currently accepting bookings !!');
+    }
     // Pass 7 — Payment System: previously set to 'paid' unconditionally right here, before
     // any gateway was ever involved (Gap G6, docs/passes/01-domain-state-model.md). Now
     // left at its schema default ('unpaid') and only flipped to 'paid' by
@@ -344,6 +351,10 @@ const createAppointmentByUnAuthenticateUser = async (payload: any, idempotencyKe
         const doctorForFee = await tx.doctor.findUnique({ where: { id: doctorIdForUnauth } });
         if (!doctorForFee) {
             throw new ApiError(httpStatus.NOT_FOUND, 'Doctor Account is not found !!');
+        }
+        // Pass 10: same approval check as the authenticated booking path above.
+        if (doctorForFee.approvalStatus !== 'APPROVED') {
+            throw new ApiError(httpStatus.CONFLICT, 'This doctor is not currently accepting bookings !!');
         }
         const currency = doctorForFee.currency;
         // Pass 7: minor units — see api/src/shared/money.ts. Preserves the existing

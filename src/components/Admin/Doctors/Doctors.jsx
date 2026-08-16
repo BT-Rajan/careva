@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import AdminLayout from '../AdminLayout/AdminLayout';
 import { Table, Input, Select, Button, Modal, Form, message, Card, Avatar, Space, Tag, Switch } from 'antd';
 import { FaSearch, FaPlus, FaEdit, FaTrash, FaUserMd } from 'react-icons/fa';
-import { useGetDoctorsQuery, useUpdateDoctorMutation } from '../../../redux/api/doctorApi';
+import { useGetDoctorsForAdminQuery, useUpdateDoctorMutation, useUpdateDoctorApprovalStatusMutation } from '../../../redux/api/doctorApi';
 import { doctorSpecialistOptions } from '../../../constant/global';
 import ImageUploadWithCrop from '../../UI/ImageUploadWithCrop';
 import './Doctors.css';
@@ -26,8 +26,9 @@ const Doctors = () => {
         ...(specialtyFilter && { specialist: specialtyFilter }),
     }), [page, pageSize, searchTerm, specialtyFilter]);
 
-    const { data, isLoading, refetch } = useGetDoctorsQuery(queryParams);
+    const { data, isLoading, refetch } = useGetDoctorsForAdminQuery(queryParams);
     const [updateDoctor, { isLoading: isUpdating }] = useUpdateDoctorMutation();
+    const [updateApprovalStatus, { isLoading: isApprovalUpdating }] = useUpdateDoctorApprovalStatusMutation();
 
     const doctors = data?.doctors || [];
     const meta = data?.meta || {};
@@ -88,22 +89,38 @@ const Doctors = () => {
         }
     };
 
-    const handleStatusToggle = async (doctor) => {
+    // Pass 10: relabeled from handleStatusToggle — this only ever toggled `verified`
+    // (email verification), which the admin UI previously mislabeled as "Active"/
+    // "Inactive" status. Kept as a legitimate admin capability (e.g. manually marking
+    // email verified if delivery failed), now clearly separated from real approval.
+    const handleEmailVerifiedToggle = async (doctor) => {
         try {
-            // Pass 4: this endpoint expects a multipart FormData body with a `data` field
-            // containing a JSON string (same convention the doctor's own profile-edit form
-            // uses) — sending a plain object here previously failed server-side with a
-            // JSON parse error on every click.
             const formData = new FormData();
             formData.append('data', JSON.stringify({ verified: !doctor.verified }));
             await updateDoctor({
                 id: doctor.id,
                 data: formData
             }).unwrap();
-            message.success('Doctor status updated');
+            message.success('Email verification status updated');
             refetch();
         } catch (error) {
             message.error('Failed to update status');
+        }
+    };
+
+    // Pass 10 — Doctor Lifecycle. The real admin-review action, separate from email
+    // verification. A rejection/suspension reason is captured since it's shown to the
+    // doctor and recorded on the account.
+    const handleApprovalAction = async (doctor, status) => {
+        const reason = ['REJECTED', 'SUSPENDED'].includes(status)
+            ? (window.prompt(`Reason for ${status === 'REJECTED' ? 'rejecting' : 'suspending'} (optional):`) || undefined)
+            : undefined;
+        try {
+            await updateApprovalStatus({ id: doctor.id, status, reason }).unwrap();
+            message.success('Approval status updated');
+            refetch();
+        } catch (error) {
+            message.error(error?.data?.message || 'Failed to update approval status');
         }
     };
 
@@ -163,15 +180,52 @@ const Doctors = () => {
             ),
         },
         {
-            title: 'Status',
-            key: 'status',
+            title: 'Approval Status',
+            key: 'approvalStatus',
+            width: 220,
+            render: (_, record) => {
+                const colors = {
+                    PENDING_APPROVAL: 'gold',
+                    APPROVED: 'green',
+                    REJECTED: 'red',
+                    SUSPENDED: 'volcano',
+                    DEACTIVATED: 'default',
+                };
+                const status = record.approvalStatus || 'PENDING_APPROVAL';
+                return (
+                    <Space direction="vertical" size="small">
+                        <Tag color={colors[status] || 'default'}>{status.replace(/_/g, ' ')}</Tag>
+                        <Space size="small">
+                            {status === 'PENDING_APPROVAL' && (
+                                <>
+                                    <Button size="small" type="primary" loading={isApprovalUpdating} onClick={() => handleApprovalAction(record, 'APPROVED')}>Approve</Button>
+                                    <Button size="small" danger loading={isApprovalUpdating} onClick={() => handleApprovalAction(record, 'REJECTED')}>Reject</Button>
+                                </>
+                            )}
+                            {status === 'APPROVED' && (
+                                <Button size="small" danger loading={isApprovalUpdating} onClick={() => handleApprovalAction(record, 'SUSPENDED')}>Suspend</Button>
+                            )}
+                            {(status === 'SUSPENDED' || status === 'DEACTIVATED') && (
+                                <Button size="small" type="primary" loading={isApprovalUpdating} onClick={() => handleApprovalAction(record, 'APPROVED')}>Reactivate</Button>
+                            )}
+                            {status === 'REJECTED' && (
+                                <Button size="small" loading={isApprovalUpdating} onClick={() => handleApprovalAction(record, 'PENDING_APPROVAL')}>Re-open for review</Button>
+                            )}
+                        </Space>
+                    </Space>
+                );
+            },
+        },
+        {
+            title: 'Email Verified',
+            key: 'verified',
             width: 100,
             render: (_, record) => (
                 <Switch
                     checked={record.verified}
-                    onChange={() => handleStatusToggle(record)}
-                    checkedChildren="Active"
-                    unCheckedChildren="Inactive"
+                    onChange={() => handleEmailVerifiedToggle(record)}
+                    checkedChildren="Yes"
+                    unCheckedChildren="No"
                 />
             ),
         },
@@ -358,8 +412,8 @@ const Doctors = () => {
                     </div>
 
                     <Form.Item name="verified" valuePropName="checked">
-                        <Switch checkedChildren="Active" unCheckedChildren="Inactive" />
-                        <span className="ms-2">Active Status</span>
+                        <Switch checkedChildren="Yes" unCheckedChildren="No" />
+                        <span className="ms-2">Email Verified</span>
                     </Form.Item>
 
                     <div className="form-actions">

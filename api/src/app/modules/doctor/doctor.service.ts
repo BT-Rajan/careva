@@ -13,6 +13,7 @@ import moment from "moment";
 import { EmailtTransporter } from "../../../helpers/emailTransporter";
 import * as path from "path";
 import config from "../../../config";
+import { assertValidDoctorApprovalTransition, getProfileCompleteness, DoctorActorRole } from "./doctor-lifecycle";
 const { v4: uuidv4 } = require('uuid');
 
 const sendVerificationEmail = async (data: Doctor) => {
@@ -72,11 +73,20 @@ const create = async (payload: any): Promise<any> => {
 
 }
 
-const getAllDoctors = async (filters: IDoctorFilters, options: IOption): Promise<IGenericResponse<Doctor[]>> => {
+// Pass 10 — Doctor Lifecycle. `includeAllStatuses` is only ever true for the admin-only
+// route (doctor.route.ts's GET /admin/all) — the public listing (GET /, used by patient
+// doctor search) previously had NO filter on approval status at all, meaning a doctor
+// nobody had ever reviewed was fully visible and, per the booking-flow fix in
+// appointment.service.ts, fully bookable. Defaulting to false here means every other
+// existing caller of this function automatically gets the fix without needing to opt in.
+const getAllDoctors = async (filters: IDoctorFilters, options: IOption, includeAllStatuses: boolean = false): Promise<IGenericResponse<Doctor[]>> => {
     const { limit, page, skip } = calculatePagination(options);
     const { searchTerm, max, min, specialist, ...filterData } = filters;
 
     const andCondition = [];
+    if (!includeAllStatuses) {
+        andCondition.push({ approvalStatus: 'APPROVED' as const });
+    }
     if (searchTerm) {
         andCondition.push({
             OR: DoctorSearchableFields.map((field) => ({
@@ -144,6 +154,10 @@ const getDoctor = async (id: string): Promise<Doctor | null> => {
     return result;
 }
 
+const getAllDoctorsForAdmin = async (filters: IDoctorFilters, options: IOption): Promise<IGenericResponse<Doctor[]>> => {
+    return getAllDoctors(filters, options, true);
+}
+
 const deleteDoctor = async (reqUser: any, id: string): Promise<any> => {
     // Pass 4: previously any authenticated doctor could delete ANY doctor's account by
     // supplying a different id — no ownership check at all. Now: self, or admin.
@@ -170,7 +184,13 @@ const deleteDoctor = async (reqUser: any, id: string): Promise<any> => {
 // `verified` is the critical one — without this, a doctor could set `verified: true` in
 // their own profile-edit payload and self-approve, bypassing admin review entirely. Only
 // an admin caller (checked below) may set it.
-const DOCTOR_PROTECTED_FIELDS = ['id', 'email', 'createdAt', 'updatedAt', 'deletedAt', 'verified'];
+// Pass 10: approvalStatus and its audit fields are stripped UNCONDITIONALLY — even for
+// admin — unlike `verified`. Approval changes must go through updateApprovalStatus
+// below, which validates the transition and (for approval specifically) checks profile
+// completeness; letting admin set it directly here would bypass both checks. Same
+// architectural pattern as Pass 9's cancel-type-transition enforcement on
+// updateAppointment.
+const DOCTOR_PROTECTED_FIELDS = ['id', 'email', 'createdAt', 'updatedAt', 'deletedAt', 'verified', 'approvalStatus', 'approvalStatusChangedAt', 'approvalStatusChangedBy', 'approvalStatusChangeReason'];
 
 const updateDoctor = async (req: Request): Promise<Doctor> => {
     const file = req.file as IUpload;
@@ -205,10 +225,78 @@ const updateDoctor = async (req: Request): Promise<Doctor> => {
     return result;
 }
 
+// Pass 10 — Doctor Lifecycle. The real admin-review action, replacing the old
+// verified-toggle-as-approval conflation. Blocks approving an incomplete profile
+// (mirrors the frontend's own onboarding gate — see doctor-lifecycle.ts's comment on
+// why this duplication exists) and sends a best-effort notification email on the
+// outcomes a doctor would actually want to know about.
+const updateApprovalStatus = async (reqUser: any, doctorId: string, requestedStatus: string, reason?: string): Promise<Doctor> => {
+    const doctor = await prisma.doctor.findUnique({ where: { id: doctorId } });
+    if (!doctor) {
+        throw new ApiError(httpStatus.NOT_FOUND, 'Doctor Account is not found !!');
+    }
+    const isAdmin = reqUser?.role === 'admin';
+    const isSelf = reqUser?.userId === doctorId;
+    if (!isAdmin && !isSelf) {
+        throw new ApiError(httpStatus.FORBIDDEN, 'You are not allowed to change this doctor account\'s approval status !!');
+    }
+    const actorRole: DoctorActorRole = isAdmin ? 'admin' : 'doctor';
+    assertValidDoctorApprovalTransition(doctor.approvalStatus, requestedStatus as any, actorRole);
+
+    if (requestedStatus === 'APPROVED') {
+        const { complete, missing } = getProfileCompleteness(doctor);
+        if (!complete) {
+            throw new ApiError(httpStatus.BAD_REQUEST, `Cannot approve — profile is incomplete. Missing: ${missing.join(', ')}.`);
+        }
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+        const updated = await tx.doctor.update({
+            where: { id: doctorId },
+            data: {
+                approvalStatus: requestedStatus as any,
+                approvalStatusChangedAt: new Date(),
+                approvalStatusChangedBy: reqUser?.userId,
+                approvalStatusChangeReason: reason,
+            }
+        });
+        await tx.auditLog.create({
+            data: {
+                actorId: reqUser?.userId,
+                actorRole: reqUser?.role,
+                action: 'doctor.approval_status_changed',
+                entityType: 'Doctor',
+                entityId: doctorId,
+                metadata: { from: doctor.approvalStatus, to: requestedStatus, reason: reason ?? null },
+            }
+        });
+        return updated;
+    });
+
+    if (['APPROVED', 'REJECTED', 'SUSPENDED'].includes(requestedStatus) && result.email) {
+        const subjectByStatus: Record<string, string> = {
+            APPROVED: 'Your Careva profile has been approved',
+            REJECTED: 'Update on your Careva application',
+            SUSPENDED: 'Your Careva account has been suspended',
+        };
+        const pathName = path.join(__dirname, '../../../../template/appointment.html');
+        EmailtTransporter({
+            pathName,
+            replacementObj: { status: requestedStatus, doctorFirstName: result.firstName, doctorLastName: result.lastName },
+            toMail: result.email,
+            subject: subjectByStatus[requestedStatus]
+        }).catch((err) => console.error('Failed to send doctor approval-status email:', err));
+    }
+
+    return result;
+}
+
 export const DoctorService = {
     create,
     updateDoctor,
+    updateApprovalStatus,
     deleteDoctor,
     getAllDoctors,
+    getAllDoctorsForAdmin,
     getDoctor
 }

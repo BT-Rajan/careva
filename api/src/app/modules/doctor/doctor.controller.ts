@@ -58,10 +58,35 @@ const updateDoctor = catchAsync(async (req: Request, res: Response) => {
     })
 })
 
+const getAllDoctorsForAdmin = catchAsync(async (req: Request, res: Response) => {
+    const filter = pick(req.query, IDoctorFiltersData);
+    const options = pick(req.query, IDoctorOptions);
+    const result = await DoctorService.getAllDoctorsForAdmin(filter, options);
+    sendResponse(res, {
+        statusCode: 200,
+        message: 'Successfully Retrieve doctors !!',
+        success: true,
+        data: result,
+    })
+})
+
+const updateApprovalStatus = catchAsync(async (req: Request, res: Response) => {
+    const { status, reason } = req.body;
+    const result = await DoctorService.updateApprovalStatus(req.user, req.params.id, status, reason);
+    sendResponse<Doctor>(res, {
+        statusCode: 200,
+        message: 'Successfully Updated Doctor Approval Status !!',
+        success: true,
+        data: result,
+    })
+})
+
 export const DoctorController = {
     createDoctor,
     updateDoctor,
+    updateApprovalStatus,
     deleteDoctor,
     getAllDoctors,
+    getAllDoctorsForAdmin,
     getDoctor
 }

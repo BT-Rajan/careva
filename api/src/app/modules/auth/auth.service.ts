@@ -47,6 +47,14 @@ const loginUser = async (user: any): Promise<ILginResponse> => {
         if (getDoctorInfo && getDoctorInfo?.verified === false) {
             throw new ApiError(httpStatus.NOT_FOUND, "Please Verify Your Email First !");
         }
+        // Pass 10 — Doctor Lifecycle. Separate from the email-verification check above —
+        // a doctor can be fully email-verified and still SUSPENDED or DEACTIVATED. Does
+        // NOT block PENDING_APPROVAL or REJECTED: a doctor should still be able to log
+        // in to see their status and finish/fix their profile while awaiting or
+        // recovering from a review decision.
+        if (getDoctorInfo && (getDoctorInfo.approvalStatus === 'SUSPENDED' || getDoctorInfo.approvalStatus === 'DEACTIVATED')) {
+            throw new ApiError(httpStatus.FORBIDDEN, `Your account is ${getDoctorInfo.approvalStatus.toLowerCase()}. Contact support if you believe this is a mistake.`);
+        }
     }
     const isPasswordMatched = await bcrypt.compare(password, isUserExist.password);
 
