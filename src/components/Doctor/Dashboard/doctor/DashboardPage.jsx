@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import img from '../../../../images/avatar.jpg';
 import { FaEye, FaCheck, FaTimes, FaBriefcaseMedical } from "react-icons/fa";
-import { useGetDoctorAppointmentsQuery, useUpdateAppointmentMutation } from '../../../../redux/api/appointmentApi';
+import { useGetDoctorAppointmentsQuery, useUpdateAppointmentMutation, useCancelAppointmentMutation } from '../../../../redux/api/appointmentApi';
 import moment from 'moment';
 import { Button, Tag, message } from 'antd';
 import CustomTable from '../../../UI/component/CustomTable';
@@ -12,6 +12,7 @@ const DashboardPage = () => {
     const [sortBy, setSortBy] = useState("upcoming");
     const { data, refetch, isLoading } = useGetDoctorAppointmentsQuery({ sortBy });
     const [updateAppointment, { isError, isSuccess, error }] = useUpdateAppointmentMutation();
+    const [cancelAppointment] = useCancelAppointmentMutation();
 
     const handleOnselect = (value) => {
         // eslint-disable-next-line eqeqeq
@@ -21,22 +22,18 @@ const DashboardPage = () => {
 
 
     const updatedApppointmentStatus = (data, type) => {
-        // Pass 8: previously sent the literal strings 'accept'/'cancel' — 'accept' never
-        // matched any status value used anywhere else in the app (Doctor/Appointments/
-        // Appointments.jsx's equivalent button sent 'scheduled' for the same action), and
-        // 'cancel' was used for both "decline a pending request" and "cancel an already-
-        // scheduled appointment," two different states in the real state machine. Now
-        // sends the actual target AppointmentStatus enum value, matching Pass 4's
-        // context-aware Cancel button in Doctor/Appointments/Appointments.jsx.
-        const target = type === 'accept'
-            ? 'SCHEDULED'
-            : data.status === 'PENDING' ? 'DECLINED' : 'CANCELLED_BY_DOCTOR';
-        const changeObj = {
-            status: target
+        if (!data.id) return;
+        if (type === 'accept') {
+            updateAppointment({ id: data.id, data: { status: 'SCHEDULED' } });
+            return;
         }
-        if (data.id) {
-            updateAppointment({ id: data.id, data: changeObj })
-        }
+        // Pass 9: cancel-type transitions go through the dedicated endpoint, which
+        // computes refund eligibility server-side — the generic updateAppointment
+        // endpoint now rejects these outright (see appointment.service.ts). Target
+        // status (DECLINED vs CANCELLED_BY_DOCTOR) is resolved server-side from the
+        // appointment's current status, so this widget doesn't need to know it either.
+        const reason = window.prompt('Reason for cancelling (optional):') || undefined;
+        cancelAppointment({ id: data.id, reason });
     }
 
     useEffect(() => {

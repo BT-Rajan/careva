@@ -597,6 +597,231 @@ const deleteAppointment = async (id: string): Promise<any> => {
     return result;
 }
 
+// Pass 9: shared with cancelAppointment/rescheduleAppointment below — same template and
+// replacementObj shape used since Pass 6/7's booking-confirmation email (the template
+// already renders {{status}} dynamically, so it doubles as a generic "here's your
+// appointment's current state" notice without needing a second HTML file). Best-effort,
+// non-blocking — see the Pass 6 .catch() reasoning at every call site.
+const sendAppointmentStatusEmail = (appointment: any, subject: string, logLabel: string) => {
+    const pathName = path.join(__dirname, '../../../../template/appointment.html');
+    const replacementObj = {
+        created: moment(appointment.createdAt).format('LL'),
+        trackingId: appointment.trackingId,
+        patientType: appointment.patientType,
+        status: appointment.status,
+        paymentStatus: appointment.paymentStatus,
+        prescriptionStatus: appointment.prescriptionStatus,
+        scheduleDate: moment(appointment.scheduleDate).format('LL'),
+        scheduleTime: appointment.scheduleTime,
+        doctorImg: appointment?.doctor?.img,
+        doctorFirstName: appointment?.doctor?.firstName,
+        doctorLastName: appointment?.doctor?.lastName,
+        specialization: appointment?.doctor?.specialization,
+        designation: appointment?.doctor?.designation,
+        college: appointment?.doctor?.college,
+        patientImg: appointment?.patient?.img,
+        patientfirstName: appointment?.patient?.firstName,
+        patientLastName: appointment?.patient?.lastName,
+        dateOfBirth: appointment?.patient?.dateOfBirth ? moment().diff(moment(appointment.patient.dateOfBirth), 'years') : undefined,
+        bloodGroup: appointment?.patient?.bloodGroup,
+        city: appointment?.patient?.city,
+        state: appointment?.patient?.state,
+        country: appointment?.patient?.country
+    };
+    const toMail = [appointment.email, appointment?.doctor?.email].filter(Boolean).join(',');
+    if (!toMail) return;
+    EmailtTransporter({ pathName, replacementObj, toMail, subject }).catch((err) => console.error(`Failed to send ${logLabel} email:`, err));
+}
+
+// Pass 9 — Cancellation & Rescheduling.
+//
+// Which target status a cancel action resolves to, by actor role and the appointment's
+// CURRENT status. A patient withdrawing a still-PENDING request is CANCELLED_BY_PATIENT
+// (not DECLINED — that specifically means the doctor rejected it); a doctor or admin
+// acting on a PENDING request is DECLINED either way, since "the request will not
+// proceed" reads the same regardless of which of the two declined it, and the actor is
+// still recorded via statusChangedBy/AuditLog. This is what lets the frontend expose a
+// single "Cancel" action per role without the caller needing to know the exact target
+// enum value — see appointment-state-machine.ts for the transition legality itself.
+const CANCEL_TARGET_BY_ROLE: Record<string, Partial<Record<AppointmentStatus, AppointmentStatus>>> = {
+    patient: { PENDING: 'CANCELLED_BY_PATIENT', SCHEDULED: 'CANCELLED_BY_PATIENT' },
+    doctor: { PENDING: 'DECLINED', SCHEDULED: 'CANCELLED_BY_DOCTOR' },
+    admin: { PENDING: 'DECLINED', SCHEDULED: 'CANCELLED_BY_ADMIN' },
+};
+
+const cancelAppointment = async (reqUser: any, id: string, reason?: string): Promise<any> => {
+    const appointment = await prisma.appointments.findUnique({ where: { id } });
+    if (!appointment) {
+        throw new ApiError(httpStatus.NOT_FOUND, 'Appointment is not found !!');
+    }
+    const isAdmin = reqUser?.role === 'admin';
+    const isOwner = appointment.patientId === reqUser?.userId || appointment.doctorId === reqUser?.userId;
+    if (!isAdmin && !isOwner) {
+        throw new ApiError(httpStatus.FORBIDDEN, 'You are not allowed to cancel this appointment !!');
+    }
+
+    const roleKey = (reqUser?.role ?? '') as 'patient' | 'doctor' | 'admin';
+    const targetStatus = CANCEL_TARGET_BY_ROLE[roleKey]?.[appointment.status as AppointmentStatus];
+    if (!targetStatus) {
+        throw new ApiError(httpStatus.CONFLICT, `An appointment in ${appointment.status} status cannot be cancelled.`);
+    }
+    // Belt-and-suspenders — CANCEL_TARGET_BY_ROLE above should already only ever produce
+    // legal, authorized targets, but this is the same source-of-truth check every other
+    // transition in the app goes through; a duplicated safety net here costs nothing.
+    assertValidAppointmentTransition(appointment.status as AppointmentStatus, targetStatus, roleKey);
+
+    // Cancellation cutoff / refund-eligibility policy (config.cancellation — see
+    // config/index.ts; these are defaults to confirm with whoever owns pricing policy,
+    // not a researched business decision). Only relevant if a payment actually succeeded
+    // — a PENDING/FAILED/never-attempted payment has nothing to refund.
+    const payment = await prisma.payment.findFirst({ where: { appointmentId: id }, orderBy: { createdAt: 'desc' } });
+    let refundPlan: { hoursUntilAppointment: number | null; refundPercent: number; refundAmountMinor: number } | null = null;
+    if (payment && payment.status === PaymentStatus.SUCCEEDED) {
+        const dateOnly = moment(appointment.scheduleDate);
+        const timeOnly = moment(appointment.scheduleTime, ['hh:mm a', 'HH:mm']);
+        const scheduledMoment = dateOnly.isValid() && timeOnly.isValid()
+            ? dateOnly.clone().set({ hour: timeOnly.hour(), minute: timeOnly.minute() })
+            : null;
+        const hoursUntilAppointment = scheduledMoment ? scheduledMoment.diff(moment(), 'hours', true) : null;
+        // Unparseable date/time is treated as "late" (safer default than assuming
+        // on-time and over-refunding on bad data) rather than throwing — a cancellation
+        // should never be blocked by a data-quality issue in an unrelated field.
+        const isOnTime = hoursUntilAppointment !== null && hoursUntilAppointment >= config.cancellation.cutoffHours;
+        const refundPercent = isOnTime ? config.cancellation.onTimeRefundPercent : config.cancellation.lateRefundPercent;
+        const refundAmountMinor = Math.round(payment.totalAmount * (refundPercent / 100));
+        refundPlan = { hoursUntilAppointment, refundPercent, refundAmountMinor };
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+        const updated = await tx.appointments.update({
+            where: { id },
+            data: {
+                status: targetStatus,
+                statusChangedAt: new Date(),
+                statusChangedBy: reqUser?.userId,
+                statusChangeReason: reason,
+            },
+            include: { doctor: true, patient: true }
+        });
+        // Pass 2's AuditLog, same pattern Pass 8 established — the refund plan (even a
+        // 0%-eligible one) is recorded here regardless of whether the actual gateway
+        // refund call below succeeds, so there's always a durable record of what SHOULD
+        // have happened, not just what did.
+        await tx.auditLog.create({
+            data: {
+                actorId: reqUser?.userId,
+                actorRole: reqUser?.role,
+                action: 'appointment.cancelled',
+                entityType: 'Appointments',
+                entityId: id,
+                metadata: { from: appointment.status, to: targetStatus, reason: reason ?? null, refundPlan },
+            }
+        });
+        // Slot release: no separate action needed. assertSlotAvailable (Pass 5/8) already
+        // excludes every cancel/decline-shaped status when counting a slot's capacity —
+        // the moment this transaction commits, the slot is free for a new booking.
+        return updated;
+    });
+
+    // Pass 7's reasoning applies here too: the actual gateway refund call happens AFTER
+    // the transaction commits, not inside it (external HTTP call, same anti-pattern to
+    // avoid). The appointment IS cancelled regardless of whether the refund call below
+    // succeeds — a failed refund is a billing follow-up, not a reason to fail the
+    // cancellation the patient/doctor/admin already validly requested.
+    let refundResult: Payment | null = null;
+    if (payment && refundPlan && refundPlan.refundAmountMinor > 0) {
+        try {
+            refundResult = await PaymentService.processRefund(payment.id, refundPlan.refundAmountMinor, reason ?? 'Appointment cancelled');
+        } catch (error) {
+            console.error('Refund failed during cancellation for appointment', id, error);
+        }
+    }
+
+    sendAppointmentStatusEmail(
+        result,
+        `Appointment ${targetStatus === 'DECLINED' ? 'Declined' : 'Cancelled'} — Dr ${result?.doctor?.firstName} ${result?.doctor?.lastName}`,
+        'cancellation'
+    );
+
+    return { ...result, refund: refundResult ?? refundPlan };
+}
+
+const rescheduleAppointment = async (reqUser: any, id: string, newScheduleDate: string, newScheduleTime: string, reason?: string): Promise<any> => {
+    const appointment = await prisma.appointments.findUnique({ where: { id } });
+    if (!appointment) {
+        throw new ApiError(httpStatus.NOT_FOUND, 'Appointment is not found !!');
+    }
+    const isAdmin = reqUser?.role === 'admin';
+    const isOwner = appointment.patientId === reqUser?.userId || appointment.doctorId === reqUser?.userId;
+    if (!isAdmin && !isOwner) {
+        throw new ApiError(httpStatus.FORBIDDEN, 'You are not allowed to reschedule this appointment !!');
+    }
+    if (!newScheduleDate || !newScheduleTime) {
+        throw new ApiError(httpStatus.BAD_REQUEST, 'newScheduleDate and newScheduleTime are required !!');
+    }
+    if (appointment.status !== 'PENDING' && appointment.status !== 'SCHEDULED') {
+        throw new ApiError(httpStatus.CONFLICT, `An appointment in ${appointment.status} status cannot be rescheduled.`);
+    }
+    if (!appointment.doctorId) {
+        throw new ApiError(httpStatus.CONFLICT, 'This appointment has no assigned doctor to check availability against !!');
+    }
+
+    // Pass 9 policy decision, documented in docs/passes/09-cancellation-rescheduling.md:
+    // a PATIENT rescheduling an already-SCHEDULED appointment resets it to PENDING,
+    // requiring the doctor to re-confirm the new time — the doctor agreed to the
+    // *original* slot, not automatically to whatever the patient picks next. A doctor or
+    // admin rescheduling keeps the current status, since their own action already implies
+    // consent.
+    const resultingStatus: AppointmentStatus = (reqUser?.role === 'patient' && appointment.status === 'SCHEDULED')
+        ? 'PENDING'
+        : (appointment.status as AppointmentStatus);
+
+    const result = await runBookingTransaction(async (tx) => {
+        // Reuses Pass 5's exact capacity/validity check and Serializable-isolation
+        // protection against a race for the NEW slot — "rescheduling conflicts" is the
+        // same problem booking-time slot conflicts are, just against a different current
+        // row instead of a fresh insert.
+        await assertSlotAvailable(tx, appointment.doctorId as string, newScheduleDate, newScheduleTime);
+
+        const updated = await tx.appointments.update({
+            where: { id },
+            data: {
+                scheduleDate: newScheduleDate,
+                scheduleTime: newScheduleTime,
+                status: resultingStatus,
+                statusChangedAt: new Date(),
+                statusChangedBy: reqUser?.userId,
+                statusChangeReason: reason,
+            },
+            include: { doctor: true, patient: true }
+        });
+        await tx.auditLog.create({
+            data: {
+                actorId: reqUser?.userId,
+                actorRole: reqUser?.role,
+                action: 'appointment.rescheduled',
+                entityType: 'Appointments',
+                entityId: id,
+                metadata: {
+                    oldDate: appointment.scheduleDate, oldTime: appointment.scheduleTime,
+                    newDate: newScheduleDate, newTime: newScheduleTime,
+                    statusBefore: appointment.status, statusAfter: resultingStatus,
+                    reason: reason ?? null,
+                },
+            }
+        });
+        return updated;
+    });
+
+    sendAppointmentStatusEmail(
+        result,
+        `Appointment Rescheduled — Dr ${result?.doctor?.firstName} ${result?.doctor?.lastName}`,
+        'reschedule'
+    );
+
+    return result;
+}
+
 const updateAppointment = async (reqUser: any, id: string, payload: Partial<Appointments> & { reason?: string }): Promise<Appointments> => {
     // Pass 4: previously no ownership check, and the full request body was passed
     // straight to Prisma (mass-assignment) — any authenticated patient/doctor could PATCH
@@ -615,6 +840,17 @@ const updateAppointment = async (reqUser: any, id: string, payload: Partial<Appo
     }
     if (!payload.status) {
         throw new ApiError(httpStatus.BAD_REQUEST, 'status is required !!');
+    }
+    // Pass 9: cancel-type transitions must go through cancelAppointment, not this generic
+    // endpoint — cancellation always needs cutoff/refund-eligibility logic computed
+    // (see appointment-state-machine.ts and cancelAppointment below), and routing every
+    // cancel-shaped status through one function is what guarantees that logic can never
+    // be silently bypassed by a frontend call site that forgot to use the dedicated
+    // endpoint. This endpoint still handles SCHEDULED/COMPLETED/NO_SHOW, which have no
+    // refund implications.
+    const CANCEL_TYPE_STATUSES: AppointmentStatus[] = ['DECLINED', 'CANCELLED_BY_PATIENT', 'CANCELLED_BY_DOCTOR', 'CANCELLED_BY_ADMIN'];
+    if (CANCEL_TYPE_STATUSES.includes(payload.status as AppointmentStatus)) {
+        throw new ApiError(httpStatus.BAD_REQUEST, 'Use POST /appointment/:id/cancel to cancel or decline an appointment !!');
     }
     // Pass 8: the actual transition-legality + authorization check — who can move this
     // appointment from its CURRENT status (read fresh above, not client-supplied) to the
@@ -752,6 +988,11 @@ const updateAppointmentByDoctor = async (user: any, payload: Partial<Appointment
     }
     const { status, prescriptionStatus, description, reasonForVisit } = payload;
     if (status) {
+        // Pass 9: same cancel-must-use-dedicated-endpoint rule as updateAppointment.
+        const CANCEL_TYPE_STATUSES: AppointmentStatus[] = ['DECLINED', 'CANCELLED_BY_PATIENT', 'CANCELLED_BY_DOCTOR', 'CANCELLED_BY_ADMIN'];
+        if (CANCEL_TYPE_STATUSES.includes(status as AppointmentStatus)) {
+            throw new ApiError(httpStatus.BAD_REQUEST, 'Use POST /appointment/:id/cancel to cancel or decline an appointment !!');
+        }
         // Pass 8: same transition validation as the generic updateAppointment path —
         // this endpoint is confirmed unused by the frontend today (Pass 4), but it's
         // still a live route, and "no arbitrary status updates" applies regardless of
@@ -794,6 +1035,8 @@ export const AppointmentService = {
     getAppointment,
     deleteAppointment,
     updateAppointment,
+    cancelAppointment,
+    rescheduleAppointment,
     getPatientAppointmentById,
     getDoctorAppointmentsById,
     updateAppointmentByDoctor,

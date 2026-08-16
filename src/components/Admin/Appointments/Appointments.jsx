@@ -3,6 +3,7 @@ import AdminLayout from '../AdminLayout/AdminLayout';
 import { Table, Input, Select, Button, Tag, Space, Modal, message, DatePicker, Card, Row, Col } from 'antd';
 import { FaSearch, FaEye, FaEdit, FaTrash, FaCalendarCheck, FaClock } from 'react-icons/fa';
 import { useGetAllAppointmentsQuery, useUpdateAppointmentMutation } from '../../../redux/api/adminApi';
+import { useCancelAppointmentMutation } from '../../../redux/api/appointmentApi';
 import moment from 'moment';
 import './Appointments.css';
 
@@ -78,9 +79,21 @@ const AdminAppointments = () => {
         SCHEDULED: ['SCHEDULED', 'COMPLETED', 'CANCELLED_BY_DOCTOR', 'CANCELLED_BY_PATIENT', 'CANCELLED_BY_ADMIN', 'NO_SHOW'],
     };
 
+    const [cancelAppointment] = useCancelAppointmentMutation();
+    // Pass 9: any status the admin dropdown can select that's cancel-shaped must go
+    // through the dedicated cancel endpoint — the generic updateAppointment endpoint now
+    // rejects these outright (see appointment.service.ts), since only the dedicated path
+    // computes refund eligibility.
+    const CANCEL_TYPE_STATUSES = ['DECLINED', 'CANCELLED_BY_PATIENT', 'CANCELLED_BY_DOCTOR', 'CANCELLED_BY_ADMIN'];
+
     const handleStatusChange = async (id, newStatus) => {
         try {
-            await updateAppointment({ id, data: { status: newStatus } }).unwrap();
+            if (CANCEL_TYPE_STATUSES.includes(newStatus)) {
+                const reason = window.prompt('Reason for cancelling (optional):') || undefined;
+                await cancelAppointment({ id, reason }).unwrap();
+            } else {
+                await updateAppointment({ id, data: { status: newStatus } }).unwrap();
+            }
             message.success('Appointment status updated successfully');
             refetch();
         } catch (error) {

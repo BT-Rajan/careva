@@ -34,6 +34,11 @@ router.get('/:id', AppointmentController.getAppointment);
 // Confirmed unused by the frontend today (no delete-appointment UI exists anywhere).
 router.delete('/:id', auth(AuthUser.ADMIN), AppointmentController.deleteAppointment);
 router.patch('/:id', auth(AuthUser.ADMIN, AuthUser.DOCTOR, AuthUser.PATIENT),AppointmentController.updateAppointment);
+// Pass 9 — Cancellation & Rescheduling. Dedicated endpoints, deliberately separate from
+// the generic PATCH /:id above — see appointment.service.ts's updateAppointment for why
+// cancel-type transitions are blocked there and must come through here instead.
+router.post('/:id/cancel', auth(AuthUser.ADMIN, AuthUser.DOCTOR, AuthUser.PATIENT), AppointmentController.cancelAppointment);
+router.post('/:id/reschedule', auth(AuthUser.ADMIN, AuthUser.DOCTOR, AuthUser.PATIENT), AppointmentController.rescheduleAppointment);
 //doctor side
 router.patch('/doctor/update-appointment',auth(AuthUser.DOCTOR), AppointmentController.updateAppointmentByDoctor);
 

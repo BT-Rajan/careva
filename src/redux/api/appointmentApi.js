@@ -38,6 +38,24 @@ export const appointmentApi = baseApi.injectEndpoints({
             }),
             invalidatesTags: [tagTypes.appointments]
         }),
+        // Pass 9 — Cancellation & Rescheduling. Dedicated endpoints so cancellation
+        // always goes through refund-eligibility logic — see appointment.service.ts.
+        cancelAppointment: build.mutation({
+            query: ({ id, reason }) => ({
+                url: `${APPOINTMENT_URL}/${id}/cancel`,
+                method: 'POST',
+                data: { reason }
+            }),
+            invalidatesTags: [tagTypes.appointments]
+        }),
+        rescheduleAppointment: build.mutation({
+            query: ({ id, scheduleDate, scheduleTime, reason }) => ({
+                url: `${APPOINTMENT_URL}/${id}/reschedule`,
+                method: 'POST',
+                data: { scheduleDate, scheduleTime, reason }
+            }),
+            invalidatesTags: [tagTypes.appointments]
+        }),
         getPatientAppointments: build.query({
             query: () => ({
                 url: `${APPOINTMENT_URL}/patient/appointments`,
@@ -101,6 +119,8 @@ export const {
     useGetPatientInvoicesQuery,
     useGetDoctorInvoicesQuery,
     useUpdateAppointmentMutation,
+    useCancelAppointmentMutation,
+    useRescheduleAppointmentMutation,
     useCreateAppointmentByUnauthenticateUserMutation, 
     useTrackAppointmentMutation
 } = appointmentApi;

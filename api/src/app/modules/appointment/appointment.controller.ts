@@ -79,6 +79,27 @@ const updateAppointment = catchAsync(async (req: Request, res: Response) => {
     })
 })
 
+const cancelAppointment = catchAsync(async (req: Request, res: Response) => {
+    const result = await AppointmentService.cancelAppointment(req.user, req.params.id, req.body?.reason);
+    sendResponse(res, {
+        statusCode: 200,
+        message: 'Successfully Cancelled Appointment !!',
+        success: true,
+        data: result,
+    })
+})
+
+const rescheduleAppointment = catchAsync(async (req: Request, res: Response) => {
+    const { scheduleDate, scheduleTime, reason } = req.body;
+    const result = await AppointmentService.rescheduleAppointment(req.user, req.params.id, scheduleDate, scheduleTime, reason);
+    sendResponse(res, {
+        statusCode: 200,
+        message: 'Successfully Rescheduled Appointment !!',
+        success: true,
+        data: result,
+    })
+})
+
 const getPatientAppointmentById = catchAsync(async (req: Request, res: Response) => {
     const result = await AppointmentService.getPatientAppointmentById(req.user);
     sendResponse<Appointments[]>(res, {
@@ -154,6 +175,8 @@ export const AppointmentController = {
     updateAppointmentByDoctor,
     getPatientAppointmentById,
     updateAppointment,
+    cancelAppointment,
+    rescheduleAppointment,
     createAppointment,
     getAllAppointment,
     getAppointment,

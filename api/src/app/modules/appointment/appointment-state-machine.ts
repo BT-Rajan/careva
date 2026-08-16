@@ -29,7 +29,12 @@ export type AppointmentActorRole = 'admin' | 'doctor' | 'patient';
  * implementing an already-specified transition rather than inventing one.
  */
 export const TRANSITIONS: Record<AppointmentStatus, AppointmentStatus[]> = {
-    PENDING: ['SCHEDULED', 'DECLINED', 'EXPIRED'],
+    // Pass 9: added CANCELLED_BY_PATIENT here — a patient withdrawing a request the
+    // doctor hasn't yet responded to is semantically different from DECLINED (which
+    // means the doctor rejected it). Both are still distinguishable from SCHEDULED
+    // cancellations via the actor recorded in AuditLog either way, but the status itself
+    // now reflects who acted, not just "this didn't happen."
+    PENDING: ['SCHEDULED', 'DECLINED', 'EXPIRED', 'CANCELLED_BY_PATIENT'],
     SCHEDULED: ['COMPLETED', 'CANCELLED_BY_PATIENT', 'CANCELLED_BY_DOCTOR', 'CANCELLED_BY_ADMIN', 'NO_SHOW'],
     DECLINED: [],
     EXPIRED: [],
@@ -48,6 +53,8 @@ export const TRANSITIONS: Record<AppointmentStatus, AppointmentStatus[]> = {
 const TRANSITION_ACTORS: Record<string, AppointmentActorRole[]> = {
     'PENDING->SCHEDULED': ['doctor', 'admin'],
     'PENDING->DECLINED': ['doctor', 'admin'],
+    // Pass 9: patient withdrawing their own still-pending request.
+    'PENDING->CANCELLED_BY_PATIENT': ['patient', 'admin'],
     'SCHEDULED->COMPLETED': ['doctor', 'admin'],
     'SCHEDULED->NO_SHOW': ['doctor', 'admin'],
     'SCHEDULED->CANCELLED_BY_PATIENT': ['patient', 'admin'],

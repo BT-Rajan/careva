@@ -3,17 +3,31 @@ import img from '../../../images/doc/doctor 3.jpg';
 import moment from 'moment';
 import { useGetPatientAppointmentsQuery, useGetPatientInvoicesQuery } from '../../../redux/api/appointmentApi';
 import { useGetPatientPrescriptionQuery } from '../../../redux/api/prescriptionApi';
-import { Button, Tabs, Tag, Tooltip } from 'antd';
+import { Button, Tabs, Tag, Tooltip, message } from 'antd';
 import CustomTable from '../../UI/component/CustomTable';
 import { Link } from 'react-router-dom';
 import dayjs from 'dayjs';
 import { FaRegEye } from "react-icons/fa";
 import { clickToCopyClipBoard } from '../../../utils/copyClipBoard';
+import { useCancelAppointmentMutation } from '../../../redux/api/appointmentApi';
 
 const PatientDashboard = () => {
     const { data, isLoading: pIsLoading } = useGetPatientAppointmentsQuery();
     const { data: prescriptionData, prescriptionIsLoading } = useGetPatientPrescriptionQuery();
     const { data: invoices, isLoading: InvoicesIsLoading } = useGetPatientInvoicesQuery();
+    // Pass 9 — Cancellation & Rescheduling. Previously there was no patient-facing
+    // cancellation action anywhere in the product — this is the first one.
+    const [cancelAppointment, { isLoading: isCancelling }] = useCancelAppointmentMutation();
+
+    const handleCancel = async (id) => {
+        const reason = window.prompt('Reason for cancelling (optional):') || undefined;
+        try {
+            await cancelAppointment({ id, reason }).unwrap();
+            message.success('Appointment cancelled');
+        } catch (error) {
+            message.error(error?.data?.message || 'Failed to cancel appointment');
+        }
+    };
     
     const InvoiceColumns = [
         {
@@ -205,12 +219,19 @@ const PatientDashboard = () => {
         {
             title: 'Action',
             key: 25,
-            width: 100,
+            width: 160,
             render: function (data) {
                 return (
-                    <Link to={`/dashboard/appointments/${data.id}`}>
-                        <Button type='primary'>View</Button>
-                    </Link>
+                    <div className="d-flex gap-2">
+                        <Link to={`/dashboard/appointments/${data.id}`}>
+                            <Button type='primary'>View</Button>
+                        </Link>
+                        {(data?.status === 'PENDING' || data?.status === 'SCHEDULED') && (
+                            <Button danger loading={isCancelling} onClick={() => handleCancel(data.id)}>
+                                Cancel
+                            </Button>
+                        )}
+                    </div>
                 )
             }
         },

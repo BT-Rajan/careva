@@ -233,10 +233,13 @@ const handleWebhook = async (providerName: 'razorpay' | 'telr', rawBody: string,
     return { status: 'processed' };
 }
 
-const refundPayment = async (reqUser: any, paymentId: string, amountMinor: number, reason?: string): Promise<Payment> => {
-    if (reqUser?.role !== 'admin') {
-        throw new ApiError(httpStatus.FORBIDDEN, 'Only an admin can issue a refund !!');
-    }
+// Pass 9 — Cancellation & Rescheduling: extracted from refundPayment so cancellation
+// flows (appointment.service.ts) can trigger a policy-computed refund without going
+// through the admin-only gate below — eligibility there was already decided by the
+// cancellation cutoff policy, not by an arbitrary admin request. refundPayment (the
+// admin API endpoint) wraps this with its own role/eligibility checks for manual
+// refunds; this function does the actual gateway call + bookkeeping either way.
+const processRefund = async (paymentId: string, amountMinor: number, reason?: string): Promise<Payment> => {
     const payment = await prisma.payment.findUnique({ where: { id: paymentId } });
     if (!payment) {
         throw new ApiError(httpStatus.NOT_FOUND, 'Payment record is not found !!');
@@ -250,6 +253,12 @@ const refundPayment = async (reqUser: any, paymentId: string, amountMinor: numbe
     const alreadyRefunded = payment.refundedAmount ?? 0;
     if (alreadyRefunded + amountMinor > payment.totalAmount) {
         throw new ApiError(httpStatus.BAD_REQUEST, 'Refund amount exceeds remaining refundable balance !!');
+    }
+    if (amountMinor <= 0) {
+        // Not an error — a 0-eligibility late cancellation legitimately results in "no
+        // refund to process." Callers (e.g. cancelAppointment) should check for this and
+        // skip calling processRefund entirely rather than calling it with 0.
+        throw new ApiError(httpStatus.BAD_REQUEST, 'Refund amount must be greater than zero !!');
     }
 
     const provider = getProviderByName(payment.provider);
@@ -275,9 +284,17 @@ const refundPayment = async (reqUser: any, paymentId: string, amountMinor: numbe
     return updated;
 }
 
+const refundPayment = async (reqUser: any, paymentId: string, amountMinor: number, reason?: string): Promise<Payment> => {
+    if (reqUser?.role !== 'admin') {
+        throw new ApiError(httpStatus.FORBIDDEN, 'Only an admin can issue a refund !!');
+    }
+    return processRefund(paymentId, amountMinor, reason);
+}
+
 export const PaymentService = {
     createProviderOrderForPayment,
     verifyAndFinalizePayment,
     handleWebhook,
     refundPayment,
+    processRefund,
 }

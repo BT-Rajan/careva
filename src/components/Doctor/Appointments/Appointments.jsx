@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import DashboardLayout from '../DashboardLayout/DashboardLayout';
 import { Table, Tag, Button, Input, Select, DatePicker, Space, Modal, message, Card } from 'antd';
 import { FaEye, FaCheck, FaTimes, FaBriefcaseMedical, FaSearch } from 'react-icons/fa';
-import { useGetDoctorAppointmentsQuery, useUpdateAppointmentMutation } from '../../../redux/api/appointmentApi';
+import { useGetDoctorAppointmentsQuery, useUpdateAppointmentMutation, useCancelAppointmentMutation } from '../../../redux/api/appointmentApi';
 import moment from 'moment';
 import { Link } from 'react-router-dom';
 import './Appointments.css';
@@ -18,6 +18,7 @@ const Appointments = () => {
 
     const { data, isLoading, refetch } = useGetDoctorAppointmentsQuery({});
     const [updateAppointment, { isLoading: isUpdating }] = useUpdateAppointmentMutation();
+    const [cancelAppointment, { isLoading: isCancelling }] = useCancelAppointmentMutation();
 
     const appointments = data || [];
 
@@ -61,6 +62,21 @@ const Appointments = () => {
             refetch();
         } catch (error) {
             message.error('Failed to update appointment status');
+        }
+    };
+
+    // Pass 9: cancel-type transitions go through the dedicated endpoint, which computes
+    // refund eligibility server-side — the generic updateAppointment endpoint now
+    // rejects these outright (see appointment.service.ts). A reason prompt is included
+    // since it's recorded on the appointment and shown to the patient.
+    const handleCancel = async (id) => {
+        const reason = window.prompt('Reason for cancelling (optional):') || undefined;
+        try {
+            await cancelAppointment({ id, reason }).unwrap();
+            message.success('Appointment cancelled');
+            refetch();
+        } catch (error) {
+            message.error(error?.data?.message || 'Failed to cancel appointment');
         }
     };
 
@@ -184,7 +200,8 @@ const Appointments = () => {
                                 danger
                                 icon={<FaTimes />}
                                 size="small"
-                                onClick={() => handleStatusUpdate(record.id, 'DECLINED')}
+                                loading={isCancelling}
+                                onClick={() => handleCancel(record.id)}
                             >
                                 Decline
                             </Button>
@@ -209,7 +226,8 @@ const Appointments = () => {
                                 danger
                                 icon={<FaTimes />}
                                 size="small"
-                                onClick={() => handleStatusUpdate(record.id, 'CANCELLED_BY_DOCTOR')}
+                                loading={isCancelling}
+                                onClick={() => handleCancel(record.id)}
                             >
                                 Cancel
                             </Button>

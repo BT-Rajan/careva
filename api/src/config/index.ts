@@ -50,4 +50,15 @@ export default {
     // backendLiveUrl/backendLocalUrl above, which already have `/api/v1/auth/` baked in
     // for the email-link use case and would need fragile string surgery to reuse here.
     backendOrigin: process.env.NODE_ENV === 'development' ? process.env.BACKEND_ORIGIN_LOCAL : process.env.BACKEND_ORIGIN,
+    // Pass 9 — Cancellation & Rescheduling. These are reasonable defaults, not a
+    // researched business policy — confirm/adjust with whoever owns pricing/policy
+    // decisions before relying on them in production. Kept configurable via env vars
+    // specifically so that adjustment doesn't require a code change.
+    cancellation: {
+        // Cancelling this many hours or more before the scheduled time is "on-time";
+        // less than this is "late." See docs/passes/09-cancellation-rescheduling.md.
+        cutoffHours: process.env.CANCELLATION_CUTOFF_HOURS ? Number(process.env.CANCELLATION_CUTOFF_HOURS) : 24,
+        onTimeRefundPercent: process.env.CANCELLATION_ON_TIME_REFUND_PERCENT ? Number(process.env.CANCELLATION_ON_TIME_REFUND_PERCENT) : 100,
+        lateRefundPercent: process.env.CANCELLATION_LATE_REFUND_PERCENT ? Number(process.env.CANCELLATION_LATE_REFUND_PERCENT) : 50,
+    },
 }
