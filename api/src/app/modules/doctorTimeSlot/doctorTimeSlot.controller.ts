@@ -73,6 +73,36 @@ const getAppointmentTimeOfEachDoctor = catchAsync(async (req: Request, res: Resp
 })
 
 
+const createBlockedDate = catchAsync(async (req: Request, res: Response) => {
+    const result = await TimeSlotService.createBlockedDate(req.user, req.body.date, req.body.reason);
+    sendResponse(res, {
+        statusCode: 200,
+        message: 'Successfully blocked date !!',
+        success: true,
+        data: result
+    })
+})
+
+const deleteBlockedDate = catchAsync(async (req: Request, res: Response) => {
+    const result = await TimeSlotService.deleteBlockedDate(req.user, req.params.id);
+    sendResponse(res, {
+        statusCode: 200,
+        message: 'Successfully removed blocked date !!',
+        success: true,
+        data: result
+    })
+})
+
+const getMyBlockedDates = catchAsync(async (req: Request, res: Response) => {
+    const result = await TimeSlotService.getMyBlockedDates(req.user);
+    sendResponse(res, {
+        statusCode: 200,
+        message: 'Successfully retrieved blocked dates !!',
+        success: true,
+        data: result
+    })
+})
+
 export const doctorTimeSlotController = {
     getAllTimeSlot,
     getTimeSlot,
@@ -80,5 +110,8 @@ export const doctorTimeSlotController = {
     createTimeSlot,
     deleteTimeSlot,
     getMyTimeSlot,
-    getAppointmentTimeOfEachDoctor
+    getAppointmentTimeOfEachDoctor,
+    createBlockedDate,
+    deleteBlockedDate,
+    getMyBlockedDates,
 }

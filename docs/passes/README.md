@@ -15,7 +15,7 @@ at a time, in order. Each pass is committed and pushed on completion.
 | 8 | Appointment State Machine | ✅ Complete |
 | 9 | Cancellation & Rescheduling | ✅ Complete (backend + cancel UI; reschedule UI deferred — see doc) |
 | 10 | Doctor Lifecycle | ✅ Complete |
-| 11 | Doctor Schedule Engine | ⏳ Not started |
+| 11 | Doctor Schedule Engine | ✅ Complete |
 | 12 | Patient Data & Medical Records | ⏳ Not started |
 | 13 | Prescription & Treatment | ⏳ Not started |
 | 14 | Invoice & Financial Records | ⏳ Not started |

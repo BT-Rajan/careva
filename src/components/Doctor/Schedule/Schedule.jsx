@@ -1,9 +1,10 @@
 import DashboardLayout from '../DashboardLayout/DashboardLayout';
 import React, { useEffect, useState } from 'react';
 import { Card, Tag, Button, Empty, message, TimePicker, Modal, Tabs } from 'antd';
-import { useCreateTimeSlotMutation, useGetDoctorTimeSlotQuery, useUpdateTimeSlotMutation } from '../../../redux/api/timeSlotApi';
-import { FaPlus, FaEdit, FaTrash, FaClock } from "react-icons/fa";
+import { useCreateTimeSlotMutation, useGetDoctorTimeSlotQuery, useUpdateTimeSlotMutation, useGetBlockedDatesQuery, useCreateBlockedDateMutation, useDeleteBlockedDateMutation } from '../../../redux/api/timeSlotApi';
+import { FaPlus, FaEdit, FaTrash, FaClock, FaCalendarTimes } from "react-icons/fa";
 import moment from 'moment';
+import { DatePicker } from 'antd';
 import './Schedule.css';
 
 const Schedule = () => {
@@ -14,6 +15,41 @@ const Schedule = () => {
     const [UpdateTimeSlot, { isError: uIsError, error: uError, isLoading: UIsLoading, isSuccess: uIsSuccess }] = useUpdateTimeSlotMutation();
     const { data, refetch, isLoading, isError } = useGetDoctorTimeSlotQuery({ day: activeDay });
     const [createTimeSlot, { isError: AIsError, error, isLoading: AIsLoading, isSuccess }] = useCreateTimeSlotMutation();
+
+    // Pass 11 — Doctor Schedule Engine: blocked dates (holidays, leave) — previously
+    // there was no way for a doctor to mark themselves unavailable on a specific
+    // calendar date at all, only the recurring weekly template.
+    const { data: blockedDates, refetch: refetchBlockedDates } = useGetBlockedDatesQuery();
+    const [createBlockedDate, { isLoading: isBlockingDate }] = useCreateBlockedDateMutation();
+    const [deleteBlockedDate] = useDeleteBlockedDateMutation();
+    const [newBlockedDate, setNewBlockedDate] = useState(null);
+    const [blockedDateReason, setBlockedDateReason] = useState('');
+
+    const handleAddBlockedDate = async () => {
+        if (!newBlockedDate) {
+            message.warning('Pick a date first');
+            return;
+        }
+        try {
+            await createBlockedDate({ date: newBlockedDate.format('YYYY-MM-DD'), reason: blockedDateReason || undefined }).unwrap();
+            message.success('Date blocked');
+            setNewBlockedDate(null);
+            setBlockedDateReason('');
+            refetchBlockedDates();
+        } catch (err) {
+            message.error(err?.data?.message || 'Failed to block date');
+        }
+    };
+
+    const handleRemoveBlockedDate = async (id) => {
+        try {
+            await deleteBlockedDate(id).unwrap();
+            message.success('Blocked date removed');
+            refetchBlockedDates();
+        } catch (err) {
+            message.error('Failed to remove blocked date');
+        }
+    };
 
     const [isAddModalOpen, setIsAddModalOpen] = useState(false);
     const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -219,6 +255,50 @@ const Schedule = () => {
                                     </div>
                                 ))}
                             </div>
+                        </div>
+                    )}
+                </Card>
+            </div>
+
+            <div className="dashboard-card">
+                <div className="dashboard-card-header">
+                    <h3 className="dashboard-card-title">Blocked Dates</h3>
+                </div>
+                <Card>
+                    <div className="d-flex gap-2 align-items-start mb-3" style={{ flexWrap: 'wrap' }}>
+                        <DatePicker
+                            value={newBlockedDate}
+                            onChange={setNewBlockedDate}
+                            disabledDate={(current) => current && current < moment().startOf('day')}
+                            placeholder="Select a date to block"
+                        />
+                        <input
+                            type="text"
+                            className="form-control"
+                            style={{ maxWidth: 220 }}
+                            placeholder="Reason (optional)"
+                            value={blockedDateReason}
+                            onChange={(e) => setBlockedDateReason(e.target.value)}
+                        />
+                        <Button type="primary" loading={isBlockingDate} onClick={handleAddBlockedDate}>
+                            Block this date
+                        </Button>
+                    </div>
+                    {(!blockedDates || blockedDates.length === 0) && (
+                        <Empty description="No blocked dates" />
+                    )}
+                    {blockedDates && blockedDates.length > 0 && (
+                        <div className="time-slots-grid">
+                            {blockedDates.map((bd) => (
+                                <div key={bd.id} className="time-slot-card">
+                                    <FaCalendarTimes className="time-icon" />
+                                    <div className="time-range">
+                                        {moment(bd.date).format('LL')}
+                                        {bd.reason && <div className="text-muted small">{bd.reason}</div>}
+                                    </div>
+                                    <Button danger size="small" icon={<FaTrash />} onClick={() => handleRemoveBlockedDate(bd.id)} />
+                                </div>
+                            ))}
                         </div>
                     )}
                 </Card>

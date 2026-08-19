@@ -39,6 +39,23 @@ const assertSlotAvailable = async (
         throw new ApiError(httpStatus.BAD_REQUEST, 'scheduleDate and scheduleTime are required !!');
     }
 
+    // Pass 11 — Doctor Schedule Engine: blocked dates (holidays, leave). Checked here too,
+    // not just in the display endpoint (doctorTimeSlot.service.ts) — display can be
+    // stale or bypassed entirely (e.g. a client retrying an old request), so booking
+    // enforcement can't rely on the frontend having already filtered this out.
+    // Normalized to YYYY-MM-DD before lookup — scheduleDate can carry a time-of-day
+    // component ("2026-08-20 00:00:00"), but a blocked date means the whole calendar
+    // day, and DoctorBlockedDate.date is always stored normalized (see
+    // doctorTimeSlot.service.ts's createBlockedDate) — exact-string matching the raw
+    // scheduleDate against it would silently never match.
+    const normalizedDate = moment(scheduleDate).format('YYYY-MM-DD');
+    const blockedDate = await tx.doctorBlockedDate.findUnique({
+        where: { doctorId_date: { doctorId, date: normalizedDate } }
+    });
+    if (blockedDate) {
+        throw new ApiError(httpStatus.CONFLICT, "The doctor is unavailable on the selected date !!");
+    }
+
     const weekday = moment(scheduleDate).format('dddd').toLowerCase();
     const doctorTimeSlot = await tx.doctorTimeSlot.findFirst({
         where: { doctorId, day: weekday as any },

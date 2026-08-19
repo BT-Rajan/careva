@@ -28,10 +28,10 @@ export const timeSlotApi = baseApi.injectEndpoints({
             providesTags: [tagTypes.timeSlot]
         }),
         getAppointmentTime: build.query({
-            query: ({ day, id }) => ({
+            query: ({ day, date, id }) => ({
                 url: `${TIMELOT_URL}/appointment-time/${id}`,
                 method: 'GET',
-                params: {day:day}
+                params: { day, date }
             }
             ),
             providesTags: [tagTypes.timeSlot]
@@ -59,6 +59,29 @@ export const timeSlotApi = baseApi.injectEndpoints({
             }),
             invalidatesTags: [tagTypes.timeSlot]
         }),
+        // Pass 11 — Doctor Schedule Engine: blocked dates (holidays, leave).
+        getBlockedDates: build.query({
+            query: () => ({
+                url: `${TIMELOT_URL}/blocked-dates`,
+                method: 'GET'
+            }),
+            providesTags: [tagTypes.timeSlot]
+        }),
+        createBlockedDate: build.mutation({
+            query: ({ date, reason }) => ({
+                url: `${TIMELOT_URL}/blocked-dates`,
+                method: 'POST',
+                data: { date, reason }
+            }),
+            invalidatesTags: [tagTypes.timeSlot]
+        }),
+        deleteBlockedDate: build.mutation({
+            query: (id) => ({
+                url: `${TIMELOT_URL}/blocked-dates/${id}`,
+                method: 'DELETE'
+            }),
+            invalidatesTags: [tagTypes.timeSlot]
+        }),
     })
 })
 
@@ -69,5 +92,8 @@ export const {
     useGetTimeSlotQuery,
     useUpdateTimeSlotMutation,
     useCreateTimeSlotMutation,
-    useGetAppointmentTimeQuery
+    useGetAppointmentTimeQuery,
+    useGetBlockedDatesQuery,
+    useCreateBlockedDateMutation,
+    useDeleteBlockedDateMutation
 } = timeSlotApi;

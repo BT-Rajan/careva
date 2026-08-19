@@ -142,6 +142,7 @@ model Doctor {
   prescription           Prescription[]
   favourites             Favourites[]
   DoctorTimeSlot         DoctorTimeSlot[]
+  blockedDates           DoctorBlockedDate[]
   blogs                  Blogs[]
   reviews                Reviews[]
 
@@ -401,6 +402,24 @@ model ScheduleDay {
   endTime          String
   doctorTimeSlot   DoctorTimeSlot? @relation(fields: [doctorTimeSlotId], references: [id], onDelete: Cascade)
   doctorTimeSlotId String?
+}
+
+// Pass 11 — Doctor Schedule Engine. Flagged as a gap since Pass 5 ("no doctor holidays /
+// one-off unavailable dates — DoctorTimeSlot only models a recurring weekly pattern").
+// `date` is a calendar date (stored as the same String-based convention as
+// Appointments.scheduleDate, for consistent comparison logic), distinct from the
+// recurring `day` (weekday) on DoctorTimeSlot — this blocks one specific date
+// (a holiday, a day of leave) without touching the recurring weekly template at all.
+model DoctorBlockedDate {
+  id        String   @id @default(uuid())
+  doctorId  String
+  doctor    Doctor   @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  date      String
+  reason    String?
+  createdAt DateTime @default(now())
+
+  @@unique([doctorId, date])
+  @@map("DoctorBlockedDate")
 }
 
 model Blogs {
