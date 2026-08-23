@@ -4,7 +4,7 @@ import { FaPlus, FaRegTrashAlt, FaCheck } from "react-icons/fa";
 import { Button, DatePicker, Space, Tooltip, Popconfirm } from "antd";
 import dayjs from 'dayjs';
 import { useEffect, useState } from "react";
-import { DatePickerSinglePresets, DiagnosisOptions, DiseaseOptions, DosageOptions, FrequencyOptions, MedicalCheckupOptions, PatientStatus, appointemntStatusOption } from "../../../constant/global";
+import { DatePickerSinglePresets, DiagnosisOptions, DiseaseOptions, DosageOptions, FrequencyOptions, MedicalCheckupOptions, PatientStatus } from "../../../constant/global";
 import SelectForm from "../../UI/form/SelectForm";
 import TextArea from "antd/es/input/TextArea";
 import InputAutoCompleteForm from "../../UI/form/InputAutoCompleteForm";
@@ -27,7 +27,6 @@ const TreatmentEdit = () => {
     const { data, isLoading } = useGetPrescriptionQuery(id);
     const [isReadyData, setIsReadyData] = useState(false);
     const { handleSubmit } = useForm();
-    const [selectAppointmentStatus, setSelectAppointmentStatus] = useState('');
     const [patientStatus, setPatientStatus] = useState('');
     const [daignosis, setDaignosis] = useState([]);
     const [disease, setDisease] = useState([]);
@@ -65,7 +64,6 @@ const TreatmentEdit = () => {
 
     const onSubmit = (data) => {
         const obj = {};
-        obj.status = selectAppointmentStatus;
         obj.patientType = patientStatus;
 
         daignosis.length && (obj["daignosis"] = daignosis.join(','))
@@ -117,22 +115,6 @@ const TreatmentEdit = () => {
                 </div>
 
                 <form className="row form-row" onSubmit={handleSubmit(onSubmit)}>
-                    <div className="col-md-6">
-                        <div className="form-group mb-4">
-                            <div className="mb-2">
-                                <h6 className="card-title text-secondary">Change Appointment Status</h6>
-                            </div>
-                            {isReadyData &&
-                                <SelectForm
-                                    showSearch={true}
-                                    options={appointemntStatusOption}
-                                    setSelectData={setSelectAppointmentStatus}
-                                    defaultValue={data?.appointment?.status}
-                                />
-                            }
-                        </div>
-                    </div>
-
                     <div className="col-md-6">
                         <div className="form-group mb-4">
                             <div className="mb-2">

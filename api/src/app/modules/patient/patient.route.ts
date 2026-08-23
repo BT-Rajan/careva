@@ -14,6 +14,7 @@ router.get('/', auth(AuthUser.ADMIN), PatientController.getAllPatients);
 router.post('/', PatientController.createPatient);
 router.get('/:id', auth(AuthUser.ADMIN, AuthUser.PATIENT), PatientController.getPatient);
 router.delete('/:id', auth(AuthUser.ADMIN), PatientController.deletePatient);
+router.patch('/:id/reactivate', auth(AuthUser.ADMIN), PatientController.reactivatePatient);
 router.patch('/:id',
     CloudinaryHelper.upload.single('file'),
     auth(AuthUser.PATIENT, AuthUser.ADMIN),

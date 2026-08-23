@@ -16,7 +16,7 @@ at a time, in order. Each pass is committed and pushed on completion.
 | 9 | Cancellation & Rescheduling | ✅ Complete (backend + cancel UI; reschedule UI deferred — see doc) |
 | 10 | Doctor Lifecycle | ✅ Complete |
 | 11 | Doctor Schedule Engine | ✅ Complete |
-| 12 | Patient Data & Medical Records | ⏳ Not started |
+| 12 | Patient Data & Medical Records | ✅ Complete |
 | 13 | Prescription & Treatment | ⏳ Not started |
 | 14 | Invoice & Financial Records | ⏳ Not started |
 | 15 | Tracking & Public Access | ⏳ Not started |

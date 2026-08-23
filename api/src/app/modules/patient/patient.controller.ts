@@ -34,10 +34,20 @@ const getPatient = catchAsync(async (req: Request, res: Response) => {
 })
 
 const deletePatient = catchAsync(async (req: Request, res: Response) => {
-    const result = await PatientService.deletePatient(req.params.id);
+    const result = await PatientService.deletePatient(req.user, req.params.id);
     sendResponse<Patient>(res, {
         statusCode: 200,
         message: 'Successfully Deleted Patient !!',
+        success: true,
+        data: result,
+    })
+})
+
+const reactivatePatient = catchAsync(async (req: Request, res: Response) => {
+    const result = await PatientService.reactivatePatient(req.user, req.params.id);
+    sendResponse<Patient>(res, {
+        statusCode: 200,
+        message: 'Successfully Reactivated Patient !!',
         success: true,
         data: result,
     })
@@ -59,4 +69,5 @@ export const PatientController = {
     getPatient,
     getAllPatients,
     deletePatient,
+    reactivatePatient,
 }

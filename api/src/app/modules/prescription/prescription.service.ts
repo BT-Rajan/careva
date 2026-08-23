@@ -1,7 +1,8 @@
 import httpStatus from "http-status";
 import ApiError from "../../../errors/apiError";
 import prisma from "../../../shared/prisma";
-import { Prescription } from "@prisma/client";
+import { Prescription, AppointmentStatus } from "@prisma/client";
+import { assertValidAppointmentTransition } from "../appointment/appointment-state-machine";
 
 const createPrescription = async (user: any, paylaod: any): Promise<{message: string}> => {
     const { medicine, ...others } = paylaod;
@@ -26,26 +27,66 @@ const createPrescription = async (user: any, paylaod: any): Promise<{message: st
         throw new ApiError(httpStatus.FORBIDDEN, 'You are not allowed to prescribe for this appointment !!');
     }
 
+    // Pass 12 BUG FIX (critical, live-breaking): this previously took a raw `status`
+    // string straight from the client (Treatment.jsx's dropdown, which used a stale
+    // constant — 'confirmed', 'InProgress', 'archived', etc. — none of which have ever
+    // been valid values, and definitely aren't valid AppointmentStatus enum members
+    // since Pass 8) and wrote it directly via Prisma, completely bypassing
+    // assertValidAppointmentTransition. Since Pass 8 turned `status` into a real enum,
+    // every one of the dropdown's options would fail the update with a Prisma validation
+    // error — meaning doctors could not successfully create a prescription at all through
+    // this form. Fixed at the root: creating a prescription always means treatment was
+    // given, which always means the appointment is now COMPLETED — there was never a
+    // real reason for this to be a free-form field the client controls. See
+    // Doctor/Treatment/Treatment.jsx for the matching frontend fix (the status picker is
+    // removed, not just corrected, since the outcome is no longer ambiguous).
+    const { patientType, ...rest } = others;
+    assertValidAppointmentTransition(isAppointment.status as AppointmentStatus, 'COMPLETED', 'doctor');
+
     await prisma.$transaction(async (tx) => {
-        const {status, patientType, ...rest} = others;
         await tx.appointments.update({
             where: {
                 id: isAppointment.id
             },
             data: {
                 isFollowUp: paylaod.followUpDate ? true : false,
-                status: status || undefined,
+                status: 'COMPLETED',
+                statusChangedAt: new Date(),
+                statusChangedBy: userId,
                 patientType: patientType || undefined,
                 prescriptionStatus: "issued"
             }
         })
-        
+        await tx.auditLog.create({
+            data: {
+                actorId: userId,
+                actorRole: 'doctor',
+                action: 'appointment.status_changed',
+                entityType: 'Appointments',
+                entityId: isAppointment.id,
+                metadata: { from: isAppointment.status, to: 'COMPLETED', reason: 'Prescription created' },
+            }
+        });
+
         const prescription = await tx.prescription.create({
             data: {
                 ...rest,
                 doctorId: isDoctor.id,
                 patientId: isAppointment.patientId,
                 medicines: undefined
+            }
+        });
+        // Pass 12 — Medical-record audit trail. Prescription create/update/delete had no
+        // audit trail at all before this pass — a clinical record with real legal weight
+        // was exactly as unaudited as any other CRUD row.
+        await tx.auditLog.create({
+            data: {
+                actorId: userId,
+                actorRole: 'doctor',
+                action: 'prescription.created',
+                entityType: 'Prescription',
+                entityId: prescription.id,
+                metadata: { appointmentId: isAppointment.id, patientId: isAppointment.patientId },
             }
         });
 
@@ -90,14 +131,20 @@ const updatePrescriptionAndAppointment = async (user: any, paylaod: any): Promis
     }
 
     await prisma.$transaction(async (tx) => {
-        
+
+        // Pass 12 BUG FIX: previously wrote a raw `status` field straight from the
+        // client here too (same broken source as createPrescription's bug — see that
+        // function's comment). By the time a prescription exists to edit, its
+        // appointment is already COMPLETED (a terminal state — Pass 8's state machine
+        // has zero legal outgoing transitions from it), so this update never needs to
+        // touch status at all; `status` is destructured off `paylaod` above purely to
+        // keep it out of `others`/`rest` and is otherwise ignored.
         await tx.appointments.update({
             where: {
                 id: isPrescribed.appointmentId
             },
             data: {
                 isFollowUp: followUpdate ? true : false,
-                status: status,
                 patientType: patientType,
             }
         })
@@ -108,6 +155,17 @@ const updatePrescriptionAndAppointment = async (user: any, paylaod: any): Promis
             },
             data: {
                 ...others,
+            }
+        });
+        // Pass 12 — Medical-record audit trail.
+        await tx.auditLog.create({
+            data: {
+                actorId: userId,
+                actorRole: 'doctor',
+                action: 'prescription.updated',
+                entityType: 'Prescription',
+                entityId: prescriptionId,
+                metadata: { appointmentId: isPrescribed.appointmentId, fields: Object.keys(others) },
             }
         });
 
