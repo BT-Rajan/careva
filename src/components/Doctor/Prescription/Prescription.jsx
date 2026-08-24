@@ -3,7 +3,9 @@ import { Card, Table, Button, Tag, Input, DatePicker, Space, Popconfirm, message
 import { FaEye, FaEdit, FaTrash, FaSearch, FaPills, FaUserMd } from 'react-icons/fa';
 import { Link } from 'react-router-dom';
 import {
+	useArchivePrescriptionMutation,
 	useDeletePrescriptionMutation,
+	useFulfillPrescriptionMutation,
 	useGetDoctorPrescriptionQuery,
 	useGetPatientPrescriptionQuery,
 } from '../../../redux/api/prescriptionApi';
@@ -18,6 +20,12 @@ const { Text } = Typography;
 const DoctorPrescriptions = () => {
 	const { data, isLoading } = useGetDoctorPrescriptionQuery();
 	const [deletePrescription, { isLoading: deleteLoading }] = useDeletePrescriptionMutation();
+	// Pass 13 — Prescription & Treatment. status replaces the old isFullfilled/isArchived
+	// booleans, neither of which was ever settable from this page (the mutation meant to
+	// set them was dead code — see prescriptionApi.js). Fulfilled/Archived are now real,
+	// reachable actions.
+	const [fulfillPrescription, { isLoading: fulfillLoading }] = useFulfillPrescriptionMutation();
+	const [archivePrescription, { isLoading: archiveLoading }] = useArchivePrescriptionMutation();
 	const [searchTerm, setSearchTerm] = useState('');
 	const [dateRange, setDateRange] = useState(null);
 
@@ -34,9 +42,17 @@ const DoctorPrescriptions = () => {
 
 	const stats = [
 		{ title: 'Total Prescriptions', count: data?.length || 0, color: 'primary' },
-		{ title: 'Active', count: data?.filter((p) => !p?.isArchived)?.length || 0, color: 'success' },
-		{ title: 'Archived', count: data?.filter((p) => p?.isArchived)?.length || 0, color: 'warning' },
+		{ title: 'Active', count: data?.filter((p) => p?.status === 'ISSUED')?.length || 0, color: 'success' },
+		{ title: 'Fulfilled', count: data?.filter((p) => p?.status === 'FULFILLED')?.length || 0, color: 'info' },
+		{ title: 'Archived', count: data?.filter((p) => p?.status === 'ARCHIVED')?.length || 0, color: 'warning' },
 	];
+
+	const STATUS_TAG_COLOR = {
+		ISSUED: '#52c41a',
+		FULFILLED: '#1677ff',
+		CORRECTED: '#8c8c8c',
+		ARCHIVED: '#f50',
+	};
 
 	const columns = [
 		{
@@ -71,7 +87,7 @@ const DoctorPrescriptions = () => {
 			key: 'status',
 			width: 120,
 			render: (_, record) => (
-				<Tag color={record?.isArchived ? '#f50' : '#52c41a'}>{record?.isArchived ? 'Archived' : 'Active'}</Tag>
+				<Tag color={STATUS_TAG_COLOR[record?.status] || 'default'}>{record?.status || 'ISSUED'}</Tag>
 			),
 		},
 		{
@@ -85,30 +101,46 @@ const DoctorPrescriptions = () => {
 			title: 'Actions',
 			key: 'actions',
 			fixed: 'right',
-			width: 200,
-			render: (_, record) => (
-				<Space wrap>
-					<Link to={`/dashboard/prescription/${record.id}`}>
-						<Button type="primary" icon={<FaEye />} size="small">
-							View
-						</Button>
-					</Link>
-					<Link to={`/dashboard/appointment/treatment/edit/${record.id}`}>
-						<Button type="default" icon={<FaEdit />} size="small">
-							Edit
-						</Button>
-					</Link>
-					<Popconfirm
-						title="Delete prescription?"
-						description="Are you sure you want to delete this prescription?"
-						onConfirm={() => deleteHandler(record.id)}
-						okText="Yes"
-						cancelText="No"
-					>
-						<Button danger icon={<FaTrash />} size="small" loading={deleteLoading} />
-					</Popconfirm>
-				</Space>
-			),
+			width: 280,
+			render: (_, record) => {
+				const isIssued = record?.status === 'ISSUED';
+				const isFulfilled = record?.status === 'FULFILLED';
+				return (
+					<Space wrap>
+						<Link to={`/dashboard/prescription/${record.id}`}>
+							<Button type="primary" icon={<FaEye />} size="small">
+								View
+							</Button>
+						</Link>
+						{(isIssued || isFulfilled) && (
+							<Link to={`/dashboard/appointment/treatment/edit/${record.id}`}>
+								<Button type="default" icon={<FaEdit />} size="small">
+									Correct
+								</Button>
+							</Link>
+						)}
+						{isIssued && (
+							<Button size="small" loading={fulfillLoading} onClick={() => fulfillHandler(record.id)}>
+								Mark Fulfilled
+							</Button>
+						)}
+						{(isIssued || isFulfilled) && (
+							<Button size="small" loading={archiveLoading} onClick={() => archiveHandler(record.id)}>
+								Archive
+							</Button>
+						)}
+						<Popconfirm
+							title="Delete prescription?"
+							description="Are you sure you want to delete this prescription?"
+							onConfirm={() => deleteHandler(record.id)}
+							okText="Yes"
+							cancelText="No"
+						>
+							<Button danger icon={<FaTrash />} size="small" loading={deleteLoading} />
+						</Popconfirm>
+					</Space>
+				);
+			},
 		},
 	];
 
@@ -117,7 +149,25 @@ const DoctorPrescriptions = () => {
 			await deletePrescription(id).unwrap();
 			message.success('Prescription deleted successfully!');
 		} catch (error) {
-			message.error('Failed to delete prescription');
+			message.error(error?.data?.message || 'Failed to delete prescription');
+		}
+	};
+
+	const fulfillHandler = async (id) => {
+		try {
+			await fulfillPrescription(id).unwrap();
+			message.success('Prescription marked as fulfilled!');
+		} catch (error) {
+			message.error(error?.data?.message || 'Failed to update prescription');
+		}
+	};
+
+	const archiveHandler = async (id) => {
+		try {
+			await archivePrescription(id).unwrap();
+			message.success('Prescription archived!');
+		} catch (error) {
+			message.error(error?.data?.message || 'Failed to archive prescription');
 		}
 	};
 

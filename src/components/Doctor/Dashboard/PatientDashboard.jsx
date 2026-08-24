@@ -139,11 +139,20 @@ const PatientDashboard = () => {
             }
         },
         {
-            title: 'Archived',
-            dataIndex: "isArchived",
+            // Pass 13: was `dataIndex: "isArchived"` with `render: function({isArchived})`
+            // — antd passes the raw cell value (a boolean) to `render` when `dataIndex`
+            // is set, not the row object, so destructuring `{isArchived}` off a boolean
+            // was always `undefined` and this column silently always rendered "Under
+            // Treatment" regardless of the real value. isArchived/isFullfilled are gone
+            // now anyway, replaced by the real `status` lifecycle (see
+            // prescription-lifecycle.ts) — this reads the row directly instead of a
+            // single dataIndex field so it reflects the actual status.
+            title: 'Status',
             key: 4,
-            render: function ({isArchived}) {
-                return <Tag color={isArchived ? "#f50" : "#108ee9"}>{isArchived ? "Yes" :"Under Treatment"}</Tag>;
+            render: function (_, record) {
+                const color = { ISSUED: '#52c41a', FULFILLED: '#1677ff', CORRECTED: '#8c8c8c', ARCHIVED: '#f50' }[record?.status] || '#108ee9';
+                const label = { ISSUED: 'Active', FULFILLED: 'Fulfilled', CORRECTED: 'Corrected', ARCHIVED: 'Archived' }[record?.status] || 'Under Treatment';
+                return <Tag color={color}>{label}</Tag>;
             }
         },
         {

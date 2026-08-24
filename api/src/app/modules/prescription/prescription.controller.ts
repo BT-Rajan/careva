@@ -13,11 +13,12 @@ const createPrescription = catchAsync(async (req: Request, res: Response) => {
 })
 
 const updatePrescriptionAndAppointment = catchAsync(async (req: Request, res: Response) => {
-    await PrescriptionService.updatePrescriptionAndAppointment(req.user, req.body);
+    const result = await PrescriptionService.updatePrescriptionAndAppointment(req.user, req.body);
     sendResponse(res, {
         statusCode: 200,
         message: 'Successfully updated Prescription !!',
         success: true,
+        data: result
     })
 })
 
@@ -31,11 +32,31 @@ const getDoctorPrescriptionById = catchAsync(async (req: Request, res: Response)
     })
 })
 
-const updatePrescription = catchAsync(async (req: Request, res: Response) => {
-    const result = await PrescriptionService.updatePrescription(req.user, req.params.id, req.body);
+const markPrescriptionFulfilled = catchAsync(async (req: Request, res: Response) => {
+    const result = await PrescriptionService.markPrescriptionFulfilled(req.user, req.params.id);
     sendResponse(res, {
         statusCode: 200,
-        message: 'Successfully Updated Prescription !!',
+        message: 'Successfully Marked Prescription as Fulfilled !!',
+        success: true,
+        data: result
+    })
+})
+
+const archivePrescription = catchAsync(async (req: Request, res: Response) => {
+    const result = await PrescriptionService.archivePrescription(req.user, req.params.id);
+    sendResponse(res, {
+        statusCode: 200,
+        message: 'Successfully Archived Prescription !!',
+        success: true,
+        data: result
+    })
+})
+
+const reactivatePrescription = catchAsync(async (req: Request, res: Response) => {
+    const result = await PrescriptionService.reactivatePrescription(req.user, req.params.id);
+    sendResponse(res, {
+        statusCode: 200,
+        message: 'Successfully Restored Prescription !!',
         success: true,
         data: result
     })
@@ -86,8 +107,10 @@ export const PrescriptionController = {
     getAllPrescriptions,
     getPrescriptionById,
     deletePrescription,
+    reactivatePrescription,
     getPatientPrescriptionById,
-    updatePrescription,
+    markPrescriptionFulfilled,
+    archivePrescription,
     getDoctorPrescriptionById,
     updatePrescriptionAndAppointment
 }

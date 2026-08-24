@@ -327,22 +327,67 @@ model Prescription {
 
   followUpdate String?
   instruction  String?
-  isFullfilled Boolean @default(false)
-  isArchived   Boolean @default(false)
   daignosis    String?
 
   disease String
   test    String?
 
+  // Pass 13 — Prescription & Treatment. Replaces the two independent booleans
+  // (isFullfilled/isArchived) that existed before this pass. Neither was ever
+  // reachable from any real UI action — the frontend mutation meant to set them
+  // (prescriptionApi.js's `updatePrescription`) exported its hook under the wrong
+  // RTK Query name (`useUpdatePrescriptionQuery` instead of the auto-generated
+  // `useUpdatePrescriptionMutation` for a `build.mutation` endpoint), so the route had
+  // been silently unreachable since it was written; no component ever called it. Real
+  // lifecycle now enforced in prescription-lifecycle.ts, matching the target model in
+  // docs/passes/01-domain-state-model.md §4.4.
+  status PrescriptionStatus @default(ISSUED)
+
+  // Pass 13 — correction/versioning. The target model's CORRECTED state means "create a
+  // new linked version; original stays intact for audit" — a prescription is never
+  // edited or deleted in place once issued. supersedesId points backwards from a
+  // corrected version to the ISSUED/FULFILLED prescription it replaces; supersededBy is
+  // the reverse lookup, letting any prescription report whether it has since been
+  // corrected. See prescription.service.ts's updatePrescriptionAndAppointment, which is
+  // the endpoint that actually performs a correction (see that function's own comment
+  // for why it's not a separately-named function).
+  supersedesId String?       @unique
+  supersedes   Prescription? @relation("PrescriptionCorrection", fields: [supersedesId], references: [id], onDelete: SetNull)
+  supersededBy Prescription? @relation("PrescriptionCorrection")
+
   medicines Medicine[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-  /// Soft-delete scaffold (Pass 2). Prescriptions are medical/legal records and should
-  /// never be hard-deleted going forward; wiring is Pass 13's job.
+  /// Soft-delete (Pass 2 scaffold, wired in Pass 13). Prescriptions are medical/legal
+  /// records and are never hard-deleted — see prescription.service.ts's
+  /// deletePrescription (soft) / reactivatePrescription (admin-only restore).
   deletedAt DateTime?
 
+  @@index([status])
   @@map("Prescription")
+}
+
+// Pass 13 — Prescription & Treatment. The target lifecycle from
+// docs/passes/01-domain-state-model.md §4.4:
+//
+//   ISSUED → FULFILLED
+//      ↓        ↓
+//   CORRECTED (new linked version; original row flips to CORRECTED and stays intact)
+//
+//   ISSUED / FULFILLED → ARCHIVED   (visibility only — does not erase history)
+//
+// DRAFT is deliberately not modeled: every real code path creates a prescription
+// already-complete, atomically with the appointment's → COMPLETED transition (Pass 12)
+// — there is no partial-save UI anywhere that would ever leave a row in a draft state,
+// and adding an unused enum value/scaffold for it would be exactly the kind of
+// speculative surface Careva's hardening passes have been removing, not adding. Flagged
+// here as a deliberate omission rather than a silent one.
+enum PrescriptionStatus {
+  ISSUED
+  FULFILLED
+  CORRECTED
+  ARCHIVED
 }
 
 model Medicine {

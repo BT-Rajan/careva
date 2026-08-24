@@ -17,7 +17,7 @@ at a time, in order. Each pass is committed and pushed on completion.
 | 10 | Doctor Lifecycle | ✅ Complete |
 | 11 | Doctor Schedule Engine | ✅ Complete |
 | 12 | Patient Data & Medical Records | ✅ Complete |
-| 13 | Prescription & Treatment | ⏳ Not started |
+| 13 | Prescription & Treatment | ✅ Complete |
 | 14 | Invoice & Financial Records | ⏳ Not started |
 | 15 | Tracking & Public Access | ⏳ Not started |
 | 16 | Notifications | ⏳ Not started |

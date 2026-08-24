@@ -60,6 +60,23 @@ const PrescriptionView = () => {
     if (!isLoading && !isError && data) content =
         <>
             <div className="col-lg-8 offset-lg-2">
+                {/* Pass 13 — Prescription & Treatment. A corrected prescription's original
+                    row is never edited or deleted (docs/passes/01-domain-state-model.md
+                    §4.4) — surface that fact plainly instead of silently showing a
+                    record that's since been replaced. */}
+                {data?.status === 'CORRECTED' && data?.supersededBy && (
+                    <div className="alert alert-warning mb-2">
+                        This prescription has been corrected. <a href={`/dashboard/prescription/${data.supersededBy.id}`}>View the current version</a>.
+                    </div>
+                )}
+                {data?.supersedes && (
+                    <div className="alert alert-info mb-2">
+                        This is a corrected version of a previous prescription issued {moment(data.supersedes.createdAt).format('LL')}.
+                    </div>
+                )}
+                {data?.status === 'ARCHIVED' && (
+                    <div className="alert alert-secondary mb-2">This prescription is archived.</div>
+                )}
                 <div className="invoice-content">
                     <div className="invoice-item">
                         <div className="row">

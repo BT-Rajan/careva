@@ -17,6 +17,18 @@ const createMedicine = async (reqUser: any, payload: Medicine[]): Promise<{messa
     if (notOwned) {
         throw new ApiError(httpStatus.FORBIDDEN, 'You are not allowed to add medicine to this prescription !!');
     }
+    // Pass 13: a prescription's medicine list is part of its versioned clinical content
+    // — closing the same gap that motivated updatePrescriptionAndAppointment's rewrite
+    // into a real correction. Without this, a doctor could still add/edit/remove
+    // medicines on a CORRECTED (superseded, supposed to stay intact) or ARCHIVED
+    // prescription directly through this separate module, bypassing the lifecycle
+    // entirely. Deleted (soft-deleted) prescriptions are caught by the NOT_FOUND check
+    // above via the ACTIVE filter used elsewhere — enforced again here explicitly since
+    // this module has its own findMany.
+    const notMutable = prescriptions.some((p) => p.status !== 'ISSUED' || p.deletedAt !== null);
+    if (notMutable) {
+        throw new ApiError(httpStatus.CONFLICT, 'This prescription is no longer editable — issue a correction instead !!');
+    }
     const createMedicinePromise = payload.map((medicine: Medicine) =>
         prisma.medicine.create({
             data: {
@@ -46,6 +58,10 @@ const updateMedicine = async (reqUser: any, payload: Medicine): Promise<Medicine
     if (isPrescriptionId.doctorId !== reqUser?.userId) {
         throw new ApiError(httpStatus.FORBIDDEN, 'You are not allowed to update this medicine !!');
     }
+    // Pass 13: see the matching check in createMedicine.
+    if (isPrescriptionId.status !== 'ISSUED' || isPrescriptionId.deletedAt !== null) {
+        throw new ApiError(httpStatus.CONFLICT, 'This prescription is no longer editable — issue a correction instead !!');
+    }
 
     const result = await prisma.medicine.update({
         where: {
@@ -74,6 +90,10 @@ const deleteMedicine = async (reqUser: any, id: string): Promise<Medicine> => {
     }
     if (existing.prescription.doctorId !== reqUser?.userId) {
         throw new ApiError(httpStatus.FORBIDDEN, 'You are not allowed to delete this medicine !!');
+    }
+    // Pass 13: see the matching check in createMedicine.
+    if (existing.prescription.status !== 'ISSUED' || existing.prescription.deletedAt !== null) {
+        throw new ApiError(httpStatus.CONFLICT, 'This prescription is no longer editable — issue a correction instead !!');
     }
     const result = await prisma.medicine.delete({where: {id}})
     return result;
