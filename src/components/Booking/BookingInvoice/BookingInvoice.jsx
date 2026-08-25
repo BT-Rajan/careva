@@ -2,24 +2,27 @@ import Footer from '../../Shared/Footer/Footer';
 import logo from '../../../images/logo.png';
 import './BookingInvoice.css';
 import { useParams } from 'react-router-dom';
-import { useGetAppointmentedPaymentInfoQuery } from '../../../redux/api/appointmentApi';
+import { useGetInvoiceByAppointmentQuery } from '../../../redux/api/invoiceApi';
 import moment from 'moment';
-import { Empty, Button } from 'antd';
+import { Empty, Button, Tag } from 'antd';
 import Header from '../../Shared/Header/Header';
 import { useRef } from "react";
 import { FaPrint } from "react-icons/fa";
 import { useReactToPrint } from "react-to-print";
+import { fromMinorUnits } from '../../../utils/money';
 
 const BookingInvoice = () => {
     const printRef = useRef(null);
     const { id } = useParams();
-    const { data, isLoading, isError } = useGetAppointmentedPaymentInfoQuery(id);
+    const { data, isLoading, isError } = useGetInvoiceByAppointmentQuery(id);
 
     const handlePrint = useReactToPrint({
         contentRef: printRef,
         bodyClass: 'print-agreement',
         documentTitle: () => 'Booking-invoice',
     });
+
+    const STATUS_COLOR = { ISSUED: '#52c41a', PAID: '#1677ff', VOID: '#8c8c8c' };
 
     let content = null;
     if (isLoading) content = <div>Loading ...</div>
@@ -28,6 +31,23 @@ const BookingInvoice = () => {
     if (!isLoading && !isError && data) content =
         <>
             <div className="col-lg-8 offset-lg-2">
+                {/* Pass 14 — Invoice & Financial Records. A corrected invoice's original
+                    row is void and stays intact (docs/passes/01-domain-state-model.md
+                    §4.5) — surface that plainly rather than showing a superseded
+                    document as if it were current. */}
+                {data?.status === 'VOID' && data?.supersededBy && (
+                    <div className="alert alert-warning mb-2">
+                        This invoice has been corrected. The current version is #{data.supersededBy.invoiceNumber}.
+                    </div>
+                )}
+                {data?.status === 'VOID' && !data?.supersededBy && (
+                    <div className="alert alert-secondary mb-2">This invoice is void{data?.voidedReason ? `: ${data.voidedReason}` : '.'}</div>
+                )}
+                {data?.supersedes && (
+                    <div className="alert alert-info mb-2">
+                        This is a corrected version of invoice #{data.supersedes.invoiceNumber}, issued {moment(data.supersedes.createdAt).format('LL')}.
+                    </div>
+                )}
                 <div className="invoice-content">
                     <div className="invoice-item">
                         <div className="row">
@@ -38,7 +58,7 @@ const BookingInvoice = () => {
                             </div>
                             <div className="col-md-6">
                                 <p className="invoice-details">
-                                    <strong>Order:</strong> #00124 <br />
+                                    <strong>Invoice:</strong> #{data.invoiceNumber} <Tag color={STATUS_COLOR[data.status]}>{data.status}</Tag><br />
                                     <strong>Issued:</strong> {moment(data.createdAt).format('LL')}
                                 </p>
                             </div>
@@ -75,9 +95,9 @@ const BookingInvoice = () => {
                                 <div className="invoice-info">
                                     <strong className="customer-text">Payment Method</strong>
                                     <p className="invoice-details invoice-details-two">
-                                        {data?.paymentType} <br />
+                                        {data?.payment?.paymentType} <br />
                                         XXXXXXXXXXXX-2541 <br />
-                                        {data?.paymentMethod}<br />
+                                        {data?.payment?.paymentMethod}<br />
                                     </p>
                                 </div>
                             </div>
@@ -99,9 +119,9 @@ const BookingInvoice = () => {
                                         <tbody>
                                             <tr>
                                                 <td>General Consultation</td>
-                                                <td className="text-center">${data?.DoctorFee}</td>
-                                                <td className="text-center">${data?.vat}</td>
-                                                <td className="text-right">${data?.totalAmount}</td>
+                                                <td className="text-center">{fromMinorUnits(data?.doctorFee, data?.currency)}</td>
+                                                <td className="text-center">{fromMinorUnits(data?.vat, data?.currency)}</td>
+                                                <td className="text-right">{fromMinorUnits(data?.totalAmount, data?.currency)}</td>
                                             </tr>
                                         </tbody>
                                     </table>
@@ -113,7 +133,7 @@ const BookingInvoice = () => {
                                         <tbody>
                                             <tr>
                                                 <th>Subtotal:</th>
-                                                <td><span>${data?.totalAmount}</span></td>
+                                                <td><span>{fromMinorUnits(data?.totalAmount, data?.currency)}</span></td>
                                             </tr>
                                             <tr>
                                                 <th>Discount:</th>
@@ -121,7 +141,7 @@ const BookingInvoice = () => {
                                             </tr>
                                             <tr>
                                                 <th>Total Amount:</th>
-                                                <td><span>${data?.totalAmount}</span></td>
+                                                <td><span>{fromMinorUnits(data?.totalAmount, data?.currency)}</span></td>
                                             </tr>
                                         </tbody>
                                     </table>

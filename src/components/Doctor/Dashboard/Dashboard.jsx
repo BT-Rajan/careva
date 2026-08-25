@@ -14,8 +14,11 @@ import {
 	FaFileInvoiceDollar,
 	FaChevronRight,
 } from 'react-icons/fa';
-import { useGetDoctorAppointmentsQuery, useGetDoctorPatientsQuery, useGetDoctorInvoicesQuery } from '../../../redux/api/appointmentApi';
-import { useGetPatientAppointmentsQuery, useGetPatientInvoicesQuery } from '../../../redux/api/appointmentApi';
+import { useGetDoctorAppointmentsQuery, useGetDoctorPatientsQuery } from '../../../redux/api/appointmentApi';
+import { useGetDoctorInvoicesQuery } from '../../../redux/api/invoiceApi';
+import { fromMinorUnits } from '../../../utils/money';
+import { useGetPatientAppointmentsQuery } from '../../../redux/api/appointmentApi';
+import { useGetPatientInvoicesQuery } from '../../../redux/api/invoiceApi';
 import { useGetFavouriteQuery } from '../../../redux/api/favouriteApi';
 import { useGetPatientPrescriptionQuery } from '../../../redux/api/prescriptionApi';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
@@ -50,7 +53,9 @@ const DoctorDashboard = () => {
 		const totalAppointments = appointments.length;
 		const todayAppointments = appointments.filter((a) => moment(a.scheduleDate).isSame(moment(), 'day')).length;
 		const pendingAppointments = appointments.filter((a) => a.status === 'PENDING').length;
-		const totalRevenue = invoices.reduce((sum, inv) => sum + (inv.totalAmount || 0), 0);
+		// Pass 14: exclude VOID invoices from revenue — a superseded/cancelled invoice
+		// was never actually collected.
+		const totalRevenue = invoices.filter((inv) => inv.status !== 'VOID').reduce((sum, inv) => sum + (inv.totalAmount || 0), 0);
 
 		return {
 			totalAppointments,
@@ -58,6 +63,7 @@ const DoctorDashboard = () => {
 			totalPatients: patients.length,
 			pendingAppointments,
 			totalRevenue,
+			currency: invoices[0]?.currency ?? 'INR',
 		};
 	}, [appointments, patients, invoices]);
 
@@ -166,7 +172,7 @@ const DoctorDashboard = () => {
 					<div className="dashboard-stat-icon">
 						<FaDollarSign />
 					</div>
-					<div className="dashboard-stat-value">${stats.totalRevenue.toFixed(0)}</div>
+					<div className="dashboard-stat-value">{fromMinorUnits(stats.totalRevenue, stats.currency)}</div>
 					<div className="dashboard-stat-label">Total Revenue</div>
 				</div>
 			</div>
@@ -210,7 +216,9 @@ const PatientDashboard = () => {
 	const invoices = invoicesData || [];
 
 	const stats = useMemo(() => {
-		const totalSpent = invoices.reduce((sum, inv) => sum + (inv.totalAmount || 0), 0);
+		// Pass 14: exclude VOID invoices from spend — a superseded/cancelled invoice
+		// was never actually paid.
+		const totalSpent = invoices.filter((inv) => inv.status !== 'VOID').reduce((sum, inv) => sum + (inv.totalAmount || 0), 0);
 		const upcomingAppointments = appointments.filter((a) => moment(a.scheduleDate).isAfter(moment())).length;
 		const completedAppointments = appointments.filter((a) => a.status === 'COMPLETED').length;
 
@@ -219,6 +227,7 @@ const PatientDashboard = () => {
 			upcomingAppointments,
 			completedAppointments,
 			totalSpent,
+			currency: invoices[0]?.currency ?? 'INR',
 		};
 	}, [appointments, invoices]);
 
@@ -404,7 +413,7 @@ const PatientDashboard = () => {
 					<div className="dashboard-stat-icon">
 						<FaDollarSign />
 					</div>
-					<div className="dashboard-stat-value">${stats.totalSpent.toFixed(0)}</div>
+					<div className="dashboard-stat-value">{fromMinorUnits(stats.totalSpent, stats.currency)}</div>
 					<div className="dashboard-stat-label">Total Spent</div>
 				</div>
 			</div>

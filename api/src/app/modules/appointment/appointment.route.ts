@@ -11,13 +11,21 @@ const router = express.Router();
 router.get('/', auth(AuthUser.ADMIN), AppointmentController.getAllAppointment);
 
 router.get('/patient/appointments',auth(AuthUser.PATIENT), AppointmentController.getPatientAppointmentById);
-router.get('/patient/invoices',auth(AuthUser.PATIENT), AppointmentController.getPatientPaymentInfo);
-router.get('/doctor/invoices',auth(AuthUser.DOCTOR), AppointmentController.getDoctorInvoices);
 
 router.get('/doctor/appointments',auth(AuthUser.DOCTOR), AppointmentController.getDoctorAppointmentsById);
 router.get('/doctor/patients',auth(AuthUser.DOCTOR), AppointmentController.getDoctorPatients);
 
-router.get('/patient-payment-info/:id',auth(AuthUser.PATIENT, AuthUser.DOCTOR), AppointmentController.getPaymentInfoViaAppintmentId);
+// Pass 14 — Invoice & Financial Records: these three routes (patient/invoices,
+// doctor/invoices, patient-payment-info/:id) are REMOVED, not just left unused. They
+// rendered a raw Payment row labeled as an "invoice" — exactly Gap G7
+// (docs/passes/01-domain-state-model.md): "No persisted Invoice entity; 'invoice' is a
+// client-side render only." Now that a real Invoice entity exists (see
+// api/src/app/modules/invoice/), the equivalent — and only — endpoints are
+// GET /invoice/patient, GET /invoice/doctor, and GET /invoice/appointment/:appointmentId.
+// getPatientPaymentInfo was confirmed unused by any frontend component even before this
+// removal; getDoctorInvoices and getPaymentInfoViaAppintmentId were live (DoctorInvoice.jsx,
+// Doctor/Dashboard/Dashboard.jsx, BookingInvoice.jsx) and have been repointed to the new
+// endpoints in the same commit as this removal.
 
 router.post('/tracking', AppointmentController.getAppointmentByTrackingId);
 router.post('/create', AppointmentController.createAppointment);

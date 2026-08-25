@@ -202,6 +202,8 @@ model Appointments {
   deletedAt    DateTime?
   prescription Prescription[]
   payment      Payment[]
+  // Pass 14 — Invoice & Financial Records.
+  invoices     Invoice[]
 
   // Availability/lookup queries filter by doctor + date very frequently (booking flow,
   // doctor dashboard, admin dashboard) — this was previously an unindexed table scan.
@@ -257,6 +259,15 @@ model Payment {
   /// is Pass 14's job.
   deletedAt DateTime?
 
+  // Pass 14 — Invoice & Financial Records. See the Invoice model below: this is now a
+  // list, not a nullable single relation, because paymentId on Invoice is NOT
+  // database-unique — a corrected invoice shares its paymentId with the (now-VOID) row
+  // it replaced (see the comment on Invoice.paymentId for why). Most Payment rows have
+  // zero entries here — an Invoice is only created once the appointment reaches
+  // SCHEDULED (see invoice.service.ts) — a Payment for a still-PENDING appointment
+  // legitimately has none yet.
+  invoices Invoice[]
+
   @@index([status])
   @@index([providerOrderId])
   @@map("Payment")
@@ -283,6 +294,93 @@ model PaymentWebhookEvent {
 
   @@unique([provider, providerEventId])
   @@map("PaymentWebhookEvent")
+}
+
+// Pass 14 — Invoice & Financial Records. Target model from
+// docs/passes/01-domain-state-model.md §4.5: "Invoice becomes its own persisted,
+// immutable record generated once an appointment reaches SCHEDULED ..., linked 1:1 with
+// Payment, with DRAFT → ISSUED → PAID → VOID states. Corrections create a new invoice;
+// existing ones are never edited in place."
+//
+// Trigger decision (left open by §4.5 as "SCHEDULED or COMPLETED, decision deferred"):
+// **SCHEDULED**. An invoice documents an amount owed/paid for a confirmed booking — at
+// PENDING nothing is confirmed yet (the doctor hasn't accepted), and waiting until
+// COMPLETED (the medical visit itself) would delay billing until after the fact even
+// though the charge is already fixed at booking time. SCHEDULED is the point the amount
+// becomes final and the commitment is mutual (see invoice.service.ts's
+// generateInvoiceForAppointment, called from appointment.service.ts's PENDING→SCHEDULED
+// transition).
+//
+// DRAFT is deliberately not modeled, for the same reason Pass 13 didn't model
+// Prescription's DRAFT: generation is fully automatic and atomic (computed instantly
+// from the appointment's already-existing Payment at the moment of transition) — there
+// is no partial/unfinished state for a human to ever leave one in. Flagged as a
+// deliberate omission, not a silent one.
+model Invoice {
+  id String @id @default(uuid())
+
+  appointmentId String
+  appointment   Appointments @relation(fields: [appointmentId], references: [id], onDelete: Restrict)
+
+  // 1:1-in-spirit with Payment, but NOT a DB-unique constraint on paymentId: a
+  // corrected invoice (see supersedesId below) points at the SAME underlying payment as
+  // the one it replaces — only the invoice document is versioned, not the money
+  // movement it describes — so two Invoice rows CAN legitimately share a paymentId (one
+  // VOID, one live). The real invariant — at most one non-VOID invoice per payment at a
+  // time — is enforced in invoice.service.ts (generateInvoiceForAppointment's
+  // existing-live-invoice guard, and correctInvoice always voiding the original before
+  // creating the new row), not at the database level.
+  paymentId String
+  payment   Payment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+
+  // Human-readable sequential number, same generation convention as
+  // Appointments.trackingId (see invoice.service.ts) — distinct from the internal `id`,
+  // which is what actually gets displayed/printed on the document.
+  invoiceNumber String @unique
+
+  status InvoiceStatus @default(ISSUED)
+
+  // Snapshot of the charge at issuance time, in minor units (see api/src/shared/money.ts)
+  // — copied from Payment rather than joined-and-trusted-live, because an invoice is
+  // supposed to be an immutable record of what was charged AT THE TIME, even if the
+  // underlying Payment row is later adjusted by a refund (refundedAmount changing on
+  // Payment must never retroactively change what an already-issued invoice says it billed).
+  currency    Currency
+  doctorFee   Int
+  bookingFee  Int
+  vat         Int?
+  totalAmount Int
+
+  // Pass 14 correction/versioning — same pattern as Prescription's supersedesId (Pass
+  // 13). A corrected invoice is never edited in place: the original transitions to
+  // VOID (see invoice-lifecycle.ts — VOID is this model's only terminal "no longer
+  // current" state, doing the job Prescription's separate CORRECTED status does there)
+  // and a new Invoice row is created, linked back via supersedesId.
+  supersedesId String?  @unique
+  supersedes   Invoice? @relation("InvoiceCorrection", fields: [supersedesId], references: [id], onDelete: SetNull)
+  supersededBy Invoice? @relation("InvoiceCorrection")
+
+  voidedAt     DateTime?
+  voidedReason String?
+
+  // Pass 14: deliberately no `deletedAt` here, unlike every other soft-deletable model
+  // in this schema. VOID already IS this record's "does not count" state — an invoice
+  // is either live (ISSUED/PAID) or superseded/cancelled (VOID); there is no additional
+  // "and also hidden" state a financial document needs beyond that. Adding a second,
+  // independent hide mechanism on top of VOID would just be two ways to say the same
+  // thing.
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([paymentId])
+  @@map("Invoice")
+}
+
+enum InvoiceStatus {
+  ISSUED
+  PAID
+  VOID
 }
 
 model Reviews {

@@ -10,6 +10,7 @@ import { toMinorUnits } from "../../../shared/money";
 import { getProviderForCurrency } from "../payment/providers";
 import { PaymentService } from "../payment/payment.service";
 import { assertValidAppointmentTransition } from "./appointment-state-machine";
+import { InvoiceService } from "../invoice/invoice.service";
 
 // Pass 5 — Appointment & Slot Engine.
 //
@@ -520,101 +521,10 @@ const getPatientAppointmentById = async (user: any): Promise<Appointments[] | nu
     return result;
 }
 
-const getPaymentInfoViaAppintmentId = async (reqUser: any, id: string): Promise<any> => {
-    // Pass 4: previously no ownership check — any authenticated patient or doctor could
-    // view any OTHER appointment's payment/financial info by supplying an arbitrary id.
-    const appointment = await prisma.appointments.findUnique({ where: { id } });
-    if (!appointment) {
-        throw new ApiError(httpStatus.NOT_FOUND, 'Appointment is not found !!');
-    }
-    const isAdmin = reqUser?.role === 'admin';
-    const isOwner = appointment.patientId === reqUser?.userId || appointment.doctorId === reqUser?.userId;
-    if (!isAdmin && !isOwner) {
-        throw new ApiError(httpStatus.FORBIDDEN, 'You are not allowed to view this payment info !!');
-    }
-    const result = await prisma.payment.findFirst({
-        where: {
-            appointmentId: id
-        },
-        include: {
-            appointment: {
-                include: {
-                    patient: {
-                        select: {
-                            firstName: true,
-                            lastName: true,
-                            address: true,
-                            country: true,
-                            city: true
-                        }
-                    },
-                    doctor: {
-                        select: {
-                            firstName: true,
-                            lastName: true,
-                            address: true,
-                            country: true,
-                            city: true
-                        }
-                    }
-                }
-            }
-        }
-    });
-    return result;
-}
-
-const getPatientPaymentInfo = async (user: any): Promise<Payment[]> => {
-    const { userId } = user;
-    const isUserExist = await prisma.patient.findUnique({
-        where: { id: userId }
-    })
-    if (!isUserExist) {
-        throw new ApiError(httpStatus.NOT_FOUND, 'Patient Account is not found !!')
-    }
-    const result = await prisma.payment.findMany({
-        where: { appointment: { patientId: isUserExist.id } },
-        include: {
-            appointment: {
-                include: {
-                    doctor: {
-                        select: {
-                            firstName: true,
-                            lastName: true,
-                            designation: true
-                        }
-                    }
-                }
-            }
-        }
-    });
-    return result;
-}
-const getDoctorInvoices = async (user: any): Promise<Payment[] | null> => {
-    const { userId } = user;
-    const isUserExist = await prisma.doctor.findUnique({
-        where: { id: userId }
-    })
-    if (!isUserExist) {
-        throw new ApiError(httpStatus.NOT_FOUND, 'Doctor Account is not found !!')
-    }
-    const result = await prisma.payment.findMany({
-        where: { appointment: { doctorId: isUserExist.id } },
-        include: {
-            appointment: {
-                include: {
-                    patient: {
-                        select: {
-                            firstName: true,
-                            lastName: true
-                        }
-                    }
-                }
-            }
-        }
-    });
-    return result;
-}
+// Pass 14: getPaymentInfoViaAppintmentId / getPatientPaymentInfo / getDoctorInvoices
+// removed from here — see the removal note on the routes in appointment.route.ts.
+// Superseded by api/src/app/modules/invoice/invoice.service.ts's
+// getInvoiceByAppointmentId / getPatientInvoices / getDoctorInvoices.
 
 const deleteAppointment = async (id: string): Promise<any> => {
     const result = await prisma.appointments.delete({
@@ -745,6 +655,12 @@ const cancelAppointment = async (reqUser: any, id: string, reason?: string): Pro
                 metadata: { from: appointment.status, to: targetStatus, reason: reason ?? null, refundPlan },
             }
         });
+        // Pass 14: a cancelled/declined appointment's invoice (if it had one — only
+        // ever true if it had reached SCHEDULED) is no longer a valid live document for
+        // an appointment that isn't happening. Voiding here does NOT itself refund
+        // money — that's the separate gateway refund call below, against the same
+        // underlying Payment either way.
+        await InvoiceService.voidInvoiceForAppointment(tx, id, `Appointment ${targetStatus}`, reqUser?.userId, reqUser?.role);
         // Slot release: no separate action needed. assertSlotAvailable (Pass 5/8) already
         // excludes every cancel/decline-shaped status when counting a slot's capacity —
         // the moment this transaction commits, the slot is free for a new booking.
@@ -838,6 +754,16 @@ const rescheduleAppointment = async (reqUser: any, id: string, newScheduleDate: 
                 },
             }
         });
+        // Pass 14: a patient reschedule that resets SCHEDULED back to PENDING means the
+        // doctor's original acceptance (and the invoice generated for it) no longer
+        // holds — the doctor has to re-confirm the new time before a new invoice is
+        // generated (see generateInvoiceForAppointment, triggered the next time this
+        // appointment reaches SCHEDULED again). A doctor/admin reschedule keeps the
+        // current status (their own action already implies consent), so there's nothing
+        // to void in that case.
+        if (resultingStatus === 'PENDING' && appointment.status === 'SCHEDULED') {
+            await InvoiceService.voidInvoiceForAppointment(tx, id, 'Appointment rescheduled to a new time pending doctor confirmation', reqUser?.userId, reqUser?.role);
+        }
         return updated;
     });
 
@@ -911,6 +837,13 @@ const updateAppointment = async (reqUser: any, id: string, payload: Partial<Appo
                 metadata: { from: appointment.status, to: payload.status, reason: payload.reason ?? null },
             }
         });
+        // Pass 14 — Invoice & Financial Records: an invoice is generated the moment a
+        // booking is confirmed (PENDING→SCHEDULED is the only edge that reaches
+        // SCHEDULED — see appointment-state-machine.ts), inside this same transaction so
+        // it can never commit the status change without the invoice or vice versa.
+        if (payload.status === 'SCHEDULED') {
+            await InvoiceService.generateInvoiceForAppointment(tx, id, reqUser?.userId);
+        }
         return updated;
     });
     return result;
@@ -1051,6 +984,13 @@ const updateAppointmentByDoctor = async (user: any, payload: Partial<Appointment
                     metadata: { from: appointment.status, to: status },
                 }
             });
+            // Pass 14: same invoice-generation hook as the generic updateAppointment
+            // path above — this endpoint can legally reach SCHEDULED too, and the
+            // invariant ("every appointment that becomes SCHEDULED gets an invoice")
+            // has to hold regardless of which endpoint performed the transition.
+            if (status === 'SCHEDULED') {
+                await InvoiceService.generateInvoiceForAppointment(tx, payload.id as string, userId);
+            }
         }
         return updated;
     });
@@ -1069,9 +1009,6 @@ export const AppointmentService = {
     getDoctorAppointmentsById,
     updateAppointmentByDoctor,
     getDoctorPatients,
-    getPaymentInfoViaAppintmentId,
-    getPatientPaymentInfo,
-    getDoctorInvoices,
     createAppointmentByUnAuthenticateUser,
     getAppointmentByTrackingId
 }

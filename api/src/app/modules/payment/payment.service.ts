@@ -19,6 +19,7 @@ import ApiError from '../../../errors/apiError';
 import httpStatus from 'http-status';
 import { getProviderForCurrency, getProviderByName } from './providers';
 import { toMinorUnits } from '../../../shared/money';
+import { InvoiceService } from '../invoice/invoice.service';
 
 /**
  * Idempotent: if this Payment already has a providerOrderId, returns the existing order
@@ -135,6 +136,12 @@ const verifyAndFinalizePayment = async (paymentId: string, payload: Record<strin
             where: { id: payment.appointmentId },
             data: { paymentStatus: 'paid' }
         });
+        // Pass 14: if an invoice already exists for this payment (appointment was
+        // already SCHEDULED before the gateway confirmed), it moves ISSUED→PAID here.
+        // If not, generateInvoiceForAppointment (called from the SCHEDULED transition)
+        // reads this same up-to-date payment status and creates the invoice already-PAID
+        // — either ordering ends up consistent.
+        await InvoiceService.markInvoicePaidForPayment(tx, payment.id);
         return p;
     });
     return updated;
@@ -219,6 +226,8 @@ const handleWebhook = async (providerName: 'razorpay' | 'telr', rawBody: string,
                             where: { id: payment.appointmentId },
                             data: { paymentStatus: 'paid' }
                         });
+                        // Pass 14: same hook as verifyAndFinalizePayment's success path.
+                        await InvoiceService.markInvoicePaidForPayment(tx, paymentIdFromNotes);
                     });
                 }
             }
@@ -274,13 +283,25 @@ const processRefund = async (paymentId: string, amountMinor: number, reason?: st
     }
 
     const newRefundedTotal = alreadyRefunded + amountMinor;
+    const isFullRefund = newRefundedTotal >= payment.totalAmount;
     const updated = await prisma.payment.update({
         where: { id: payment.id },
         data: {
             refundedAmount: newRefundedTotal,
-            status: newRefundedTotal >= payment.totalAmount ? PaymentStatus.REFUNDED : PaymentStatus.PARTIALLY_REFUNDED,
+            status: isFullRefund ? PaymentStatus.REFUNDED : PaymentStatus.PARTIALLY_REFUNDED,
         }
     });
+    // Pass 14: a fully-refunded payment's invoice is voided — the money has been
+    // returned, so the document is no longer a valid record of an amount owed/paid.
+    // A partial refund deliberately does NOT void the invoice: this app has no
+    // credit-note concept, and the invoice was genuinely paid in full at some point —
+    // voiding it would lose that fact. Flagged as a known simplification, not silently
+    // decided.
+    if (isFullRefund) {
+        await prisma.$transaction(async (tx) => {
+            await InvoiceService.voidInvoiceForPayment(tx, payment.id, reason ?? 'Payment fully refunded');
+        });
+    }
     return updated;
 }
 

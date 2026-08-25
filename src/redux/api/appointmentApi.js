@@ -70,13 +70,11 @@ export const appointmentApi = baseApi.injectEndpoints({
             }),
             providesTags: [tagTypes.appointments]
         }),
-        getAppointmentedPaymentInfo: build.query({
-            query: (id) => ({
-                url: `${APPOINTMENT_URL}/patient-payment-info/${id}`,
-                method: 'GET'
-            }),
-            providesTags: [tagTypes.appointments]
-        }),
+        // Pass 14: getAppointmentedPaymentInfo / getPatientInvoices / getDoctorInvoices
+        // removed from here — they rendered a raw Payment row labeled as an "invoice"
+        // (Gap G7, docs/passes/01-domain-state-model.md). Use invoiceApi.js's
+        // useGetInvoiceByAppointmentQuery / useGetPatientInvoicesQuery /
+        // useGetDoctorInvoicesQuery instead, backed by the real Invoice entity.
         getDoctorAppointments: build.query({
             query: (arg) => ({
                 url: `${APPOINTMENT_URL}/doctor/appointments`,
@@ -92,20 +90,6 @@ export const appointmentApi = baseApi.injectEndpoints({
             }),
             providesTags: [tagTypes.appointments]
         }),
-        getPatientInvoices: build.query({
-            query: () => ({
-                url: `${APPOINTMENT_URL}/patient/invoices`,
-                method: 'GET'
-            }),
-            providesTags: [tagTypes.appointments]
-        }),
-        getDoctorInvoices: build.query({
-            query: () => ({
-                url: `${APPOINTMENT_URL}/doctor/invoices`,
-                method: 'GET'
-            }),
-            providesTags: [tagTypes.appointments]
-        })
     })
 })
 
@@ -115,9 +99,6 @@ export const {
     useGetDoctorPatientsQuery,
     useCreateAppointmentMutation,
     useGetSingleAppointmentQuery,
-    useGetAppointmentedPaymentInfoQuery,
-    useGetPatientInvoicesQuery,
-    useGetDoctorInvoicesQuery,
     useUpdateAppointmentMutation,
     useCancelAppointmentMutation,
     useRescheduleAppointmentMutation,

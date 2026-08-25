@@ -1,7 +1,8 @@
 import React from 'react';
 import img from '../../../images/doc/doctor 3.jpg';
 import moment from 'moment';
-import { useGetPatientAppointmentsQuery, useGetPatientInvoicesQuery } from '../../../redux/api/appointmentApi';
+import { useGetPatientAppointmentsQuery } from '../../../redux/api/appointmentApi';
+import { useGetPatientInvoicesQuery } from '../../../redux/api/invoiceApi';
 import { useGetPatientPrescriptionQuery } from '../../../redux/api/prescriptionApi';
 import { Button, Tabs, Tag, Tooltip, message } from 'antd';
 import CustomTable from '../../UI/component/CustomTable';
@@ -10,6 +11,7 @@ import dayjs from 'dayjs';
 import { FaRegEye } from "react-icons/fa";
 import { clickToCopyClipBoard } from '../../../utils/copyClipBoard';
 import { useCancelAppointmentMutation } from '../../../redux/api/appointmentApi';
+import { fromMinorUnits } from '../../../utils/money';
 
 const PatientDashboard = () => {
     const { data, isLoading: pIsLoading } = useGetPatientAppointmentsQuery();
@@ -34,7 +36,7 @@ const PatientDashboard = () => {
             title: 'Doctor',
             key: 1,
             width: 150,
-            render: function (data) {
+            render: function (_, data) {
                 return (
                     <div className="avatar avatar-sm mr-2 d-flex gap-2">
                         <div>
@@ -49,16 +51,23 @@ const PatientDashboard = () => {
             }
         },
         {
+            // Pass 14: was `dataIndex: "totalAmount"` with no render — showed the raw
+            // minor-unit integer (e.g. "6000" for what is actually 60.00) rather than a
+            // formatted currency amount. Also picks up the invoice's real lifecycle
+            // status alongside the figure.
             title: 'Total Paid',
             key: 2,
-            width: 100,
-            dataIndex: "totalAmount"
+            width: 130,
+            render: function (_, data) {
+                const color = { ISSUED: '#52c41a', PAID: '#1677ff', VOID: '#8c8c8c' }[data?.status] || 'default';
+                return <div>{fromMinorUnits(data?.totalAmount, data?.currency)} <Tag color={color}>{data?.status}</Tag></div>;
+            }
         },
         {
             title: 'Paid On',
             key: 3,
             width: 100,
-            render: function (data) {
+            render: function (_, data) {
                 return <div>{moment(data?.createdAt).format("LL")}</div>
             }
         },
@@ -66,21 +75,25 @@ const PatientDashboard = () => {
             title: 'Payment Method',
             key: 4,
             width: 100,
-            dataIndex: "paymentMethod"
+            render: function (_, data) {
+                return <div>{data?.payment?.paymentMethod}</div>
+            }
         },
         {
             title: 'Payment Type',
-            key: 4,
+            key: 5,
             width: 100,
-            dataIndex: "paymentType"
+            render: function (_, data) {
+                return <div>{data?.payment?.paymentType}</div>
+            }
         },
         {
             title: 'Action',
-            key: '5',
+            key: '6',
             width: 100,
-            render: function (data) {
+            render: function (_, data) {
                 return (
-                    <Link to={`/booking/invoice/${data?.appointment?.id}`}>
+                    <Link to={`/booking/invoice/${data?.appointmentId}`}>
                         <Button type='primary' size='medium'>View</Button>
 
                     </Link>

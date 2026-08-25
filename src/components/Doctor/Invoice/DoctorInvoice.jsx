@@ -1,13 +1,16 @@
 import React, { useState } from 'react';
-import { useGetDoctorInvoicesQuery } from '../../../redux/api/appointmentApi';
+import { useGetDoctorInvoicesQuery } from '../../../redux/api/invoiceApi';
 import DashboardLayout from '../DashboardLayout/DashboardLayout';
 import { Card, Table, Input, Tag, Button, DatePicker, Select, Space, Avatar, Badge } from 'antd';
 import { FaEye, FaSearch, FaDollarSign, FaCreditCard, FaCalendar, FaDownload } from 'react-icons/fa';
 import { Link } from 'react-router-dom';
 import moment from 'moment';
+import { fromMinorUnits } from '../../../utils/money';
 import './DoctorInvoice.css';
 
 const { RangePicker } = DatePicker;
+
+const STATUS_TAG_COLOR = { ISSUED: '#52c41a', PAID: '#1677ff', VOID: '#8c8c8c' };
 
 const DoctorInvoice = () => {
     const { data, isLoading } = useGetDoctorInvoicesQuery();
@@ -28,12 +31,15 @@ const DoctorInvoice = () => {
             moment(invoice?.createdAt).isBetween(dateRange[0], dateRange[1], 'day', '[]');
         
         const matchesPaymentMethod = paymentMethodFilter === 'all' || 
-            invoice?.paymentMethod?.toLowerCase() === paymentMethodFilter;
+            invoice?.payment?.paymentMethod?.toLowerCase() === paymentMethodFilter;
         
         return matchesSearch && matchesDateRange && matchesPaymentMethod;
     });
 
-    const totalRevenue = filteredData?.reduce((sum, invoice) => sum + (invoice?.totalAmount || 0), 0) || 0;
+    // Pass 14: revenue excludes VOID invoices — a superseded/cancelled invoice was
+    // never actually collected (or its correction/void reflects that it shouldn't
+    // count), unlike the old Payment-based listing which had no such concept at all.
+    const totalRevenue = filteredData?.filter(i => i?.status !== 'VOID').reduce((sum, invoice) => sum + (invoice?.totalAmount || 0), 0) || 0;
 
     const stats = [
         {
@@ -44,19 +50,19 @@ const DoctorInvoice = () => {
         },
         {
             title: 'Total Revenue',
-            count: `$${totalRevenue.toFixed(2)}`,
+            count: fromMinorUnits(totalRevenue, filteredData?.[0]?.currency ?? 'INR'),
             color: 'success',
             icon: <FaDollarSign />,
         },
         {
-            title: 'Card Payments',
-            count: filteredData?.filter(i => i?.paymentMethod?.toLowerCase() === 'card')?.length || 0,
+            title: 'Paid',
+            count: filteredData?.filter(i => i?.status === 'PAID')?.length || 0,
             color: 'info',
             icon: <FaCreditCard />,
         },
         {
-            title: 'Cash Payments',
-            count: filteredData?.filter(i => i?.paymentMethod?.toLowerCase() === 'cash')?.length || 0,
+            title: 'Void',
+            count: filteredData?.filter(i => i?.status === 'VOID')?.length || 0,
             color: 'warning',
             icon: <FaDollarSign />,
         },
@@ -64,11 +70,19 @@ const DoctorInvoice = () => {
 
     const columns = [
         {
-            title: 'Invoice ID',
+            title: 'Invoice #',
             key: 'invoiceId',
-            width: 120,
+            width: 140,
             render: (_, record) => (
-                <div className="fw-bold">#{record?.id?.slice(0, 8)}</div>
+                <div className="fw-bold">{record?.invoiceNumber}</div>
+            ),
+        },
+        {
+            title: 'Status',
+            key: 'status',
+            width: 100,
+            render: (_, record) => (
+                <Tag color={STATUS_TAG_COLOR[record?.status] || 'default'}>{record?.status}</Tag>
             ),
         },
         {
@@ -93,27 +107,25 @@ const DoctorInvoice = () => {
             width: 120,
             sorter: (a, b) => a.totalAmount - b.totalAmount,
             render: (_, record) => (
-                <div className="fw-bold text-success">${record?.totalAmount}</div>
+                <div className="fw-bold text-success">{fromMinorUnits(record?.totalAmount, record?.currency)}</div>
             ),
         },
         {
             title: 'Payment Method',
-            dataIndex: 'paymentMethod',
             key: 'paymentMethod',
             width: 150,
-            render: (method) => (
-                <Tag color={method?.toLowerCase() === 'card' ? 'blue' : 'green'}>
-                    {method || 'N/A'}
+            render: (_, record) => (
+                <Tag color={record?.payment?.paymentMethod?.toLowerCase() === 'card' ? 'blue' : 'green'}>
+                    {record?.payment?.paymentMethod || 'N/A'}
                 </Tag>
             ),
         },
         {
             title: 'Payment Type',
-            dataIndex: 'paymentType',
             key: 'paymentType',
             width: 130,
-            render: (type) => (
-                <Tag color="purple">{type || 'N/A'}</Tag>
+            render: (_, record) => (
+                <Tag color="purple">{record?.payment?.paymentType || 'N/A'}</Tag>
             ),
         },
         {
@@ -140,11 +152,12 @@ const DoctorInvoice = () => {
 
     const handleExportCSV = () => {
         const csvData = filteredData?.map(invoice => ({
-            'Invoice ID': invoice?.id,
+            'Invoice #': invoice?.invoiceNumber,
+            'Status': invoice?.status,
             'Patient Name': getPatientName(invoice),
-            'Amount': invoice?.totalAmount,
-            'Payment Method': invoice?.paymentMethod,
-            'Payment Type': invoice?.paymentType,
+            'Amount': fromMinorUnits(invoice?.totalAmount, invoice?.currency),
+            'Payment Method': invoice?.payment?.paymentMethod,
+            'Payment Type': invoice?.payment?.paymentType,
             'Date': moment(invoice?.createdAt).format('YYYY-MM-DD'),
         }));
 

@@ -140,36 +140,6 @@ const getDoctorPatients = catchAsync(async (req: Request, res: Response) => {
     })
 })
 
-const getPaymentInfoViaAppintmentId = catchAsync(async (req: Request, res: Response) => {
-    const result = await AppointmentService.getPaymentInfoViaAppintmentId(req.user, req.params.id);
-    sendResponse(res, {
-        statusCode: 200,
-        message: 'Successfully retrieve payment info !!',
-        success: true,
-        data: result
-    })
-})
-
-const getPatientPaymentInfo = catchAsync(async (req: Request, res: Response) => {
-    const result = await AppointmentService.getPatientPaymentInfo(req.user);
-    sendResponse(res, {
-        statusCode: 200,
-        message: 'Successfully retrieve payment info !!',
-        success: true,
-        data: result
-    })
-})
-
-const getDoctorInvoices = catchAsync(async (req: Request, res: Response) => {
-    const result = await AppointmentService.getDoctorInvoices(req.user);
-    sendResponse(res, {
-        statusCode: 200,
-        message: 'Successfully retrieve Doctor info !!',
-        success: true,
-        data: result
-    })
-})
-
 export const AppointmentController = {
     getDoctorAppointmentsById,
     updateAppointmentByDoctor,
@@ -182,9 +152,7 @@ export const AppointmentController = {
     getAppointment,
     deleteAppointment,
     getDoctorPatients,
-    getPaymentInfoViaAppintmentId,
-    getPatientPaymentInfo,
-    getDoctorInvoices,
+
     createAppointmentByUnAuthenticateUser,
     getAppointmentByTrackingId
 }
