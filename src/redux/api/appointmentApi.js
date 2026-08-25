@@ -30,6 +30,19 @@ export const appointmentApi = baseApi.injectEndpoints({
                 data: data
             })
         }),
+        // Pass 15 — Tracking & Public Access. Same underlying endpoint as
+        // trackAppointment above, exposed as a query instead of a mutation so
+        // BookingSuccess.jsx can auto-fetch on mount (a query hook fetches automatically
+        // given an argument; a mutation hook only fires when explicitly called) —
+        // TrackAppointment.jsx's manual "paste and click Track" flow keeps using the
+        // mutation, which is the right shape for a user-triggered one-off lookup.
+        getAppointmentByTracking: build.query({
+            query: (trackingId) => ({
+                url: `${APPOINTMENT_URL}/tracking`,
+                method: 'POST',
+                data: { id: trackingId }
+            })
+        }),
         updateAppointment: build.mutation({
             query: ({ id, data }) => ({
                 url: `${APPOINTMENT_URL}/${id}`,
@@ -103,5 +116,6 @@ export const {
     useCancelAppointmentMutation,
     useRescheduleAppointmentMutation,
     useCreateAppointmentByUnauthenticateUserMutation, 
-    useTrackAppointmentMutation
+    useTrackAppointmentMutation,
+    useGetAppointmentByTrackingQuery
 } = appointmentApi;

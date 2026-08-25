@@ -150,7 +150,7 @@ const TrackAppointment = () => {
 											</div>
 
 											<Search
-												placeholder="Paste your tracking ID (e.g. ABC20240315001)"
+												placeholder="Paste your tracking ID (e.g. CV4F1A9B2C3D0E)"
 												allowClear
 												enterButton={
 													<Button type="primary" icon={<FaSearch />} loading={isLoading}>

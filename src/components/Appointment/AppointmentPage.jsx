@@ -121,7 +121,9 @@ const AppointmentPage = () => {
       setCurrent(0);
       dispatch(addInvoice({ ...appointmentData }));
 
-      const goToSuccess = () => navigate(`/booking/success/${appointmentData.id}`);
+      // Pass 15 — Tracking & Public Access: see the matching comment in
+      // DoctorBooking.jsx — navigate on trackingId, not the raw database id.
+      const goToSuccess = () => navigate(`/booking/success/${appointmentData.trackingId}`);
       Modal.success({
         className: 'appointment-success-modal',
         title: 'Appointment scheduled',

@@ -27,16 +27,22 @@ router.get('/doctor/patients',auth(AuthUser.DOCTOR), AppointmentController.getDo
 // Doctor/Dashboard/Dashboard.jsx, BookingInvoice.jsx) and have been repointed to the new
 // endpoints in the same commit as this removal.
 
+// Pass 15 — Tracking & Public Access. Deliberately public: this is the app's real
+// public-tracking surface (TrackAppointment.jsx and BookingSuccess.jsx), keyed by
+// trackingId — a cryptographically random token (see shared/trackingId.ts), not the raw
+// database id. See AppointmentService.getAppointmentByTrackingId for the deliberately
+// curated (not "every column") response shape this returns.
 router.post('/tracking', AppointmentController.getAppointmentByTrackingId);
 router.post('/create', AppointmentController.createAppointment);
 router.post('/create-un-authenticate', AppointmentController.createAppointmentByUnAuthenticateUser);
 
-// Pass 4: intentionally left public — BookingSuccess.jsx (guest, unauthenticated,
-// post-booking confirmation) and BookingInvoice.jsx depend on this being reachable
-// without login. Locking it down properly (e.g. requiring the opaque trackingId instead
-// of the raw database id) is Pass 15's job (Tracking & Public Access), not this pass's —
-// see docs/passes/04-authorization-rbac.md §"deferred".
-router.get('/:id', AppointmentController.getAppointment);
+// Pass 15 — Tracking & Public Access: now requires auth + ownership (see
+// AppointmentService.getAppointment). The one legitimate unauthenticated use this
+// endpoint used to serve — BookingSuccess.jsx's guest post-booking confirmation — now
+// goes through POST /tracking (trackingId is a real random token — see
+// shared/trackingId.ts — making that endpoint's public reachability the correct design,
+// not a gap).
+router.get('/:id', auth(AuthUser.PATIENT, AuthUser.DOCTOR, AuthUser.ADMIN), AppointmentController.getAppointment);
 
 // Pass 4: previously no auth at all — anyone could destroy any appointment record.
 // Confirmed unused by the frontend today (no delete-appointment UI exists anywhere).

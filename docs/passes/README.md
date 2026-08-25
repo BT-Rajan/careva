@@ -19,7 +19,7 @@ at a time, in order. Each pass is committed and pushed on completion.
 | 12 | Patient Data & Medical Records | ✅ Complete |
 | 13 | Prescription & Treatment | ✅ Complete |
 | 14 | Invoice & Financial Records | ✅ Complete |
-| 15 | Tracking & Public Access | ⏳ Not started |
+| 15 | Tracking & Public Access | ✅ Complete |
 | 16 | Notifications | ⏳ Not started |
 | 17 | API Contract | ⏳ Not started |
 | 18 | Error Handling & Recovery | ⏳ Not started |

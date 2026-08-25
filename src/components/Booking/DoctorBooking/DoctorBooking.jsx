@@ -177,7 +177,11 @@ const DoctorBooking = () => {
             message.success("Succcessfully Appointment Scheduled")
             setSelectValue(initialValue);
             dispatch(addInvoice({ ...appointmentData }))
-            navigation(`/booking/success/${appointmentData.id}`)
+            // Pass 15 — Tracking & Public Access: navigate on the trackingId (a real
+            // random token — see api/src/shared/trackingId.ts), not the raw database id.
+            // BookingSuccess.jsx now looks the appointment up via the public
+            // trackingId-keyed endpoint, matching how GET /appointment/:id is locked down.
+            navigation(`/booking/success/${appointmentData.trackingId}`)
         }
         if (createIsError) {
             message.error(error?.data?.message);

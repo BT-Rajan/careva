@@ -11,6 +11,7 @@ import { getProviderForCurrency } from "../payment/providers";
 import { PaymentService } from "../payment/payment.service";
 import { assertValidAppointmentTransition } from "./appointment-state-machine";
 import { InvoiceService } from "../invoice/invoice.service";
+import { generateTrackingId } from "../../../shared/trackingId";
 
 // Pass 5 — Appointment & Slot Engine.
 //
@@ -214,20 +215,13 @@ const createAppointment = async (payload: any, idempotencyKey?: string): Promise
         // first, inside the same transaction as the insert. See assertSlotAvailable above.
         await assertSlotAvailable(tx, patientInfo.doctorId, patientInfo.scheduleDate, patientInfo.scheduleTime);
 
-        const previousAppointment = await tx.appointments.findFirst({
-            orderBy: { createdAt: 'desc' },
-            take: 1
-        });
-        const appointmentLastNumber = (previousAppointment?.trackingId ?? '').slice(-3);
-        const lastDigit = (Number(appointmentLastNumber) + 1 || 0).toString().padStart(3, '0');
-
-        // Trcking Id To be ==> First 3 Letter Of User  + current year + current month + current day + unique number (Matched Previous Appointment).
-        const first3DigitName = patientInfo?.firstName?.slice(0, 3).toUpperCase();
-        const year = moment().year();
-        const month = (moment().month() + 1).toString().padStart(2, '0');
-        const day = (moment().dayOfYear()).toString().padStart(2, '0');
-        const trackingId = first3DigitName + year + month + day + lastDigit || '001';
-        patientInfo['trackingId'] = trackingId;
+        // Pass 15 — Tracking & Public Access. Was a name-prefix + date + 3-digit-counter
+        // format, guessable/enumerable rather than a real credential — see
+        // shared/trackingId.ts for why that mattered (this value is the sole credential
+        // for a public, unauthenticated lookup that returns real PII/PHI). No longer
+        // needs to look at the previous row at all — a random token doesn't need a
+        // sequential counter to avoid collisions within the same day.
+        patientInfo['trackingId'] = generateTrackingId();
 
         const appointment = await tx.appointments.create({
             data: patientInfo,
@@ -350,19 +344,9 @@ const createAppointmentByUnAuthenticateUser = async (payload: any, idempotencyKe
         const replay = await getIdempotentReplay(tx, idempotencyKey);
         if (replay) return replay;
 
-        const previousAppointment = await tx.appointments.findFirst({
-            orderBy: { createdAt: 'desc' },
-            take: 1
-        });
-
-        const appointmentLastNumber = (previousAppointment?.trackingId ?? '').slice(-3);
-        const lastDigit = (Number(appointmentLastNumber) + 1).toString().padStart(3, '0')
-        // Trcking Id To be ==> UNU - 'Un Authenticate User  + current year + current month + current day + unique number (Matched Previous Appointment).
-        const year = moment().year();
-        const month = (moment().month() + 1).toString().padStart(2, '0');
-        const day = (moment().dayOfYear()).toString().padStart(2, '0');
-        const trackingId = 'UNU' + year + month + day + lastDigit || '0001';
-        patientInfo['trackingId'] = trackingId;
+        // Pass 15 — Tracking & Public Access. See the matching comment in
+        // createAppointment above — same fix, same reason.
+        patientInfo['trackingId'] = generateTrackingId();
         const doctorIdForUnauth = patientInfo.doctorId || config.defaultAdminDoctor;
         patientInfo['doctorId'] = doctorIdForUnauth;
 
@@ -453,7 +437,18 @@ const getAllAppointments = async (): Promise<Appointments[] | null> => {
     return result;
 }
 
-const getAppointment = async (id: string): Promise<Appointments | null> => {
+// Pass 15 — Tracking & Public Access. Was completely unauthenticated (Pass 4 flagged
+// and deferred this exact gap — see the routing comment in appointment.route.ts) and
+// returned the FULL raw appointment row, including `doctor: true, patient: true` (every
+// column on both — address, phone, DOB, everything) to anyone who supplied any
+// appointment id, guessable or not. Genuinely used by two authenticated doctor-dashboard
+// pages (ViewAppointment.jsx, Treatment.jsx) that have a real logged-in user and just
+// need their own appointment's detail — now requires auth + ownership like every other
+// per-record endpoint in this app. The one legitimate unauthenticated use this endpoint
+// used to also serve — BookingSuccess.jsx's guest post-booking confirmation — is moved
+// to the trackingId-keyed lookup below, which is what it should have been all along (see
+// shared/trackingId.ts).
+const getAppointment = async (reqUser: any, id: string): Promise<Appointments | null> => {
     const result = await prisma.appointments.findUnique({
         where: {
             id: id
@@ -463,9 +458,26 @@ const getAppointment = async (id: string): Promise<Appointments | null> => {
             patient: true
         }
     });
+    if (!result) {
+        return null;
+    }
+    const isAdmin = reqUser?.role === 'admin';
+    const isOwner = result.patientId === reqUser?.userId || result.doctorId === reqUser?.userId;
+    if (!isAdmin && !isOwner) {
+        throw new ApiError(httpStatus.FORBIDDEN, 'You are not allowed to view this appointment !!');
+    }
     return result;
 }
 
+// Pass 15 — Tracking & Public Access. This IS the intentional public, unauthenticated
+// lookup — trackingId is now a real random token (shared/trackingId.ts), not a
+// name+date+counter format that was guessable/enumerable, so this being reachable
+// without login is the correct, secure design, not a gap. Explicit top-level `select`
+// added (previously bare `findUnique` with no select — every scalar column on
+// Appointments, including internal-only fields like statusChangedBy, was implicitly
+// public and would silently stay that way for any future column added to the table).
+// This list is the deliberately-chosen public surface for "check my appointment status"
+// — nothing more.
 const getAppointmentByTrackingId = async (data: any): Promise<Appointments | null> => {
     const { id } = data;
 
@@ -473,7 +485,19 @@ const getAppointmentByTrackingId = async (data: any): Promise<Appointments | nul
         where: {
             trackingId: id
         },
-        include: {
+        select: {
+            id: true,
+            trackingId: true,
+            status: true,
+            paymentStatus: true,
+            prescriptionStatus: true,
+            scheduleDate: true,
+            scheduleTime: true,
+            reasonForVisit: true,
+            description: true,
+            email: true,
+            phone: true,
+            createdAt: true,
             doctor: {
                 select: {
                     firstName: true,
@@ -481,22 +505,23 @@ const getAppointmentByTrackingId = async (data: any): Promise<Appointments | nul
                     designation: true,
                     college: true,
                     degree: true,
-                    img: true
+                    img: true,
+                    specialization: true,
+                    clinicName: true,
+                    clinicAddress: true,
+                    city: true,
+                    country: true,
                 },
             },
             patient: {
                 select: {
                     firstName: true,
                     lastName: true,
-                    address: true,
-                    city: true,
-                    country: true,
-                    state: true,
                     img: true
                 }
             }
         }
-    });
+    }) as any;
     return result;
 }
 

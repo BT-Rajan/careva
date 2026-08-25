@@ -18,7 +18,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Button, Spin, Tooltip, Empty } from 'antd';
 import moment from 'moment';
 import Header from '../Shared/Header/Header';
-import { useGetSingleAppointmentQuery } from '../../redux/api/appointmentApi';
+import { useGetAppointmentByTrackingQuery } from '../../redux/api/appointmentApi';
 import { clickToCopyClipBoard } from '../../utils/copyClipBoard';
 import { getUserInfo } from '../../service/auth.service';
 import './BookingSuccess.css';
@@ -26,7 +26,9 @@ import './BookingSuccess.css';
 const BookingSuccess = () => {
 	const { id } = useParams();
 	const navigate = useNavigate();
-	const { data, isLoading, isFetching, isError } = useGetSingleAppointmentQuery(id, { skip: !id });
+	// Pass 15 — Tracking & Public Access: `id` in this URL is the trackingId (a real
+	// random token — see api/src/shared/trackingId.ts), not the raw database id.
+	const { data, isLoading, isFetching, isError } = useGetAppointmentByTrackingQuery(id, { skip: !id });
 
 	const auth = getUserInfo();
 	const isPatient = auth?.role === 'patient';
@@ -204,7 +206,10 @@ const BookingSuccess = () => {
 
 					<div className="booking-success-actions">
 						{isPatient ? (
-							<Link to={`/dashboard/appointments/${id}`}>
+							// Pass 15: `id` here is the trackingId (see the query hook
+							// above) — ViewAppointment.jsx's route expects the raw
+							// database id, which is `data.id` in this response.
+							<Link to={`/dashboard/appointments/${data?.id}`}>
 								<Button type="primary" size="large">
 									View in dashboard
 								</Button>

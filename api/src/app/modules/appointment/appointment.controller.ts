@@ -40,7 +40,7 @@ const getAllAppointment = catchAsync(async (req: Request, res: Response) => {
 })
 
 const getAppointment = catchAsync(async (req: Request, res: Response) => {
-    const result = await AppointmentService.getAppointment(req.params.id);
+    const result = await AppointmentService.getAppointment(req.user, req.params.id);
     sendResponse<Appointments>(res, {
         statusCode: 200,
         message: 'Successfully Get Appointment !!',
