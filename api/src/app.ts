@@ -67,6 +67,21 @@ app.use((err: unknown, req: Request, res: Response, next: NextFunction) => {
         const { statusCode, message, errorMessages } = handlePrismaError(err);
         return res.status(statusCode).json({ success: false, message, errorMessages });
     }
+    // Pass 18 — Error Handling & Recovery: distinct from PrismaClientKnownRequestError
+    // above (which means the DATABASE responded, just with a client-input-shaped
+    // problem like a unique-constraint violation). This is thrown when Prisma couldn't
+    // reach the database at all — a transient infra condition, not anything about the
+    // request itself, and not a bug in this codebase. 503 (with a message telling the
+    // client to retry) is the honest signal here; previously this fell into the generic
+    // fallback below and was indistinguishable from an actual server bug, both to
+    // whoever's reading logs and to any client trying to decide whether retrying is
+    // worthwhile.
+    if (err instanceof Prisma.PrismaClientInitializationError) {
+        return res.status(httpStatus.SERVICE_UNAVAILABLE).json({
+            success: false,
+            message: 'The database is temporarily unavailable. Please try again shortly.',
+        });
+    }
     const e = err as { statusCode?: number; message?: string; stack?: string; name?: string };
     const statusCode =
         typeof e.statusCode === 'number' && e.statusCode >= 400 && e.statusCode < 600
