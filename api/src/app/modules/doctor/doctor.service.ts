@@ -10,10 +10,10 @@ import { Request } from "express";
 import { IUpload } from "../../../interfaces/file";
 import { CloudinaryHelper } from "../../../helpers/uploadHelper";
 import moment from "moment";
-import { EmailtTransporter } from "../../../helpers/emailTransporter";
 import * as path from "path";
 import config from "../../../config";
 import { assertValidDoctorApprovalTransition, getProfileCompleteness, DoctorActorRole } from "./doctor-lifecycle";
+import { NotificationService } from "../notification/notification.service";
 const { v4: uuidv4 } = require('uuid');
 
 const sendVerificationEmail = async (data: Doctor) => {
@@ -34,12 +34,24 @@ const sendVerificationEmail = async (data: Doctor) => {
         const obj = {link: url};
         const subject = "Email Verification"
         const toMail = data.email;
-        try{
-            await EmailtTransporter({pathName, replacementObj: obj, toMail, subject})
-        }catch(err){
-            console.log(err);
-            throw new ApiError(httpStatus.INTERNAL_SERVER_ERROR, 'Unable to send email !');
-        }
+        // Pass 16 BUG FIX: previously `await`ed inside a try/catch that RE-THREW on
+        // failure — a flaky mail server would fail the entire doctor-registration
+        // request even though, by this point, the doctor's account row was already
+        // committed (this function runs after the account-creation transaction — see
+        // its caller below). The doctor would see a registration error despite having
+        // an account. dispatchNotification never throws and persists the attempt for
+        // tracking/retry instead of silently losing it to a console.log.
+        await NotificationService.dispatchNotification({
+            recipientId: data.id,
+            recipientRole: 'doctor',
+            recipientEmail: toMail,
+            event: 'doctor.verification_email',
+            subject,
+            pathName,
+            replacementObj: obj,
+            relatedEntityType: 'Doctor',
+            relatedEntityId: data.id,
+        });
     }
 }
 
@@ -274,18 +286,42 @@ const updateApprovalStatus = async (reqUser: any, doctorId: string, requestedSta
     });
 
     if (['APPROVED', 'REJECTED', 'SUSPENDED'].includes(requestedStatus) && result.email) {
-        const subjectByStatus: Record<string, string> = {
-            APPROVED: 'Your Careva profile has been approved',
-            REJECTED: 'Update on your Careva application',
-            SUSPENDED: 'Your Careva account has been suspended',
+        // Pass 10 flagged reusing template/appointment.html for this as not ideal ("A
+        // proper template is Pass 16's job"). doctorStatus.html is that dedicated
+        // template — same handlebars replacement-object mechanism, shaped for an
+        // account-status notice instead of an appointment's own fields.
+        const HEADLINE_BY_STATUS: Record<string, string> = {
+            APPROVED: 'Your profile has been approved',
+            REJECTED: 'An update on your application',
+            SUSPENDED: 'Your account has been suspended',
         };
-        const pathName = path.join(__dirname, '../../../../template/appointment.html');
-        EmailtTransporter({
+        const BODY_BY_STATUS: Record<string, string> = {
+            APPROVED: 'Great news — your Careva profile has been reviewed and approved. Patients can now find and book appointments with you.',
+            REJECTED: 'After reviewing your application, we are unable to approve your Careva profile at this time.',
+            SUSPENDED: 'Your Careva account has been suspended. You will not be able to accept new bookings while this is in effect.',
+        };
+        const subject = { APPROVED: 'Your Careva profile has been approved', REJECTED: 'Update on your Careva application', SUSPENDED: 'Your Careva account has been suspended' }[requestedStatus] as string;
+        const pathName = path.join(__dirname, '../../../../template/doctorStatus.html');
+        // Pass 16: previously already `.catch()`-guarded (so not a crash risk), but left
+        // no record of whether the doctor was ever actually notified of their own
+        // account's status change — exactly the kind of event worth tracking.
+        NotificationService.dispatchNotification({
+            recipientId: doctorId,
+            recipientRole: 'doctor',
+            recipientEmail: result.email,
+            event: 'doctor.approval_status_changed',
+            subject,
             pathName,
-            replacementObj: { status: requestedStatus, doctorFirstName: result.firstName, doctorLastName: result.lastName },
-            toMail: result.email,
-            subject: subjectByStatus[requestedStatus]
-        }).catch((err) => console.error('Failed to send doctor approval-status email:', err));
+            replacementObj: {
+                headline: HEADLINE_BY_STATUS[requestedStatus],
+                doctorFirstName: result.firstName,
+                doctorLastName: result.lastName,
+                bodyText: BODY_BY_STATUS[requestedStatus],
+                reason: reason ?? undefined,
+            },
+            relatedEntityType: 'Doctor',
+            relatedEntityId: doctorId,
+        }).catch((err) => console.error('Failed to dispatch doctor approval-status notification:', err));
     }
 
     return result;

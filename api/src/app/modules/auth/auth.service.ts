@@ -6,7 +6,7 @@ import { JwtHelper } from '../../../helpers/jwtHelper';
 import config from '../../../config';
 import { Secret } from 'jsonwebtoken';
 import moment from 'moment';
-import { EmailtTransporter } from '../../../helpers/emailTransporter';
+import { NotificationService } from '../notification/notification.service';
 const { v4: uuidv4 } = require('uuid');
 import * as path from 'path';
 
@@ -138,7 +138,7 @@ const resetPassword = async (payload: any): Promise<{ message: string }> => {
     const currentTime = moment();
     const expiresTime = moment(currentTime).add(4, 'hours');
 
-    await prisma.$transaction(async (tx) => {
+    const forgotPassword = await prisma.$transaction(async (tx) => {
         // BUG FIX (Pass 3): this previously looked up an existing request by
         // `id: isUserExist.id` — but ForgotPassword rows get their own auto-generated
         // `id`, never `isUserExist.id`, so this never matched anything and every reset
@@ -148,30 +148,37 @@ const resetPassword = async (payload: any): Promise<{ message: string }> => {
             where: { userId: isUserExist.id }
         });
 
-        const forgotPassword = await tx.forgotPassword.create({
+        return tx.forgotPassword.create({
             data: {
                 userId: isUserExist.id,
                 expiresAt: expiresTime.toDate(),
                 uniqueString: resetLink
             }
         });
-        
-        if (forgotPassword) {
-            const pathName = path.join(__dirname, '../../../../template/resetPassword.html')
-            const obj = {
-                link: resetLink
-            };
-            const subject = "Request to Reset Password";
-            const toMail = isUserExist.email;
-            try {
-                await EmailtTransporter({ pathName, replacementObj: obj, toMail, subject })
-            } catch (error) {
-                console.log("Error reset password email", error);
-                throw new ApiError(httpStatus.INTERNAL_SERVER_ERROR, "Unable to send reset email!")
-            }
-        }
-        return forgotPassword;
     });
+
+    // Pass 16 BUG FIX: this used to run INSIDE the transaction above, `await`ed
+    // directly with a try/catch that re-threw on failure — meaning a flaky mail
+    // provider would roll back the ForgotPassword row this same transaction had just
+    // created, and the whole "forgot password" request would 500 despite the reset
+    // token itself being perfectly valid to have issued. Moved out of the transaction
+    // and onto dispatchNotification, which never throws and persists the attempt for
+    // tracking/retry instead of the token creation and the email being coupled to each
+    // other's success.
+    if (forgotPassword) {
+        const pathName = path.join(__dirname, '../../../../template/resetPassword.html')
+        NotificationService.dispatchNotification({
+            recipientId: isUserExist.userId,
+            recipientRole: isUserExist.role,
+            recipientEmail: isUserExist.email,
+            event: 'auth.password_reset_requested',
+            subject: 'Request to Reset Password',
+            pathName,
+            replacementObj: { link: resetLink },
+            relatedEntityType: 'Auth',
+            relatedEntityId: isUserExist.id,
+        }).catch((err) => console.error('Failed to dispatch password-reset notification:', err));
+    }
 
 
     return {

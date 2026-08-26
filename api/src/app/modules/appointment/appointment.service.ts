@@ -3,7 +3,6 @@ import prisma from "../../../shared/prisma";
 import ApiError from "../../../errors/apiError";
 import httpStatus from "http-status";
 import moment from 'moment';
-import { EmailtTransporter } from "../../../helpers/emailTransporter";
 import * as path from 'path';
 import config from "../../../config";
 import { toMinorUnits } from "../../../shared/money";
@@ -12,6 +11,7 @@ import { PaymentService } from "../payment/payment.service";
 import { assertValidAppointmentTransition } from "./appointment-state-machine";
 import { InvoiceService } from "../invoice/invoice.service";
 import { generateTrackingId } from "../../../shared/trackingId";
+import { NotificationService } from "../notification/notification.service";
 
 // Pass 5 — Appointment & Slot Engine.
 //
@@ -286,17 +286,37 @@ const createAppointment = async (payload: any, idempotencyKey?: string): Promise
         }
         const replacementObj = appointmentObj;
         const subject = `Appointment Confirm With Dr ${appointment?.doctor?.firstName + ' ' + appointment?.doctor?.lastName} at ${appointment.scheduleDate} + ' ' + ${appointment.scheduleTime}`
-        const toMail = `${appointment.email + ',' + appointment.doctor?.email}`;
-        // Pass 6: EmailtTransporter is async and deliberately NOT awaited here — a slow or
-        // failing email provider must never block or fail a successful booking. But an
-        // un-awaited async call that throws becomes an unhandled promise rejection, and
-        // Node 20+ terminates the process on those by default — meaning a single failed
-        // confirmation email could previously have crashed the entire API for every other
-        // in-flight request. The .catch here makes "email is best-effort" an explicit,
-        // safe design decision instead of an accidental process-crash risk. Real
-        // retry/delivery-tracking is Pass 16's job (Notifications) — this only stops it
-        // from being able to take the server down.
-        EmailtTransporter({ pathName, replacementObj, toMail, subject }).catch((err) => console.error('Failed to send appointment confirmation email:', err));
+        // Pass 16: previously a single EmailtTransporter call with `toMail` as a
+        // comma-joined "patient@x.com,doctor@y.com" string — both recipients saw each
+        // other's address in the same To: header, and there was no way to tell "did the
+        // patient's copy send" apart from "did the doctor's." Split into two per-
+        // recipient dispatches, matching Notification's one-row-per-recipient model.
+        if (appointment.email) {
+            NotificationService.dispatchNotification({
+                recipientId: appointment.patientId ?? null,
+                recipientRole: appointment.patientId ? 'patient' : 'guest',
+                recipientEmail: appointment.email,
+                event: 'appointment.scheduled',
+                subject,
+                pathName,
+                replacementObj,
+                relatedEntityType: 'Appointments',
+                relatedEntityId: appointment.id,
+            }).catch((err) => console.error('Failed to dispatch appointment confirmation notification (patient):', err));
+        }
+        if (appointment.doctor?.email) {
+            NotificationService.dispatchNotification({
+                recipientId: appointment.doctorId,
+                recipientRole: 'doctor',
+                recipientEmail: appointment.doctor.email,
+                event: 'appointment.scheduled',
+                subject,
+                pathName,
+                replacementObj,
+                relatedEntityType: 'Appointments',
+                relatedEntityId: appointment.id,
+            }).catch((err) => console.error('Failed to dispatch appointment confirmation notification (doctor):', err));
+        }
         // Pass 7: payment is nested onto the same object rather than restructuring the
         // response envelope — the existing frontend reads appointment fields (id,
         // trackingId, etc.) directly off the top level of this response, and the spread
@@ -410,9 +430,24 @@ const createAppointmentByUnAuthenticateUser = async (payload: any, idempotencyKe
         const subject = `Appointment Confirm at ${appointment.scheduleDate} ${appointment.scheduleTime}`
 
         const toMail = `${appointment.email}`;
-        // Pass 6: same reasoning as the authenticated path above — email failure must
-        // never crash the process or block the booking.
-        EmailtTransporter({ pathName, replacementObj, toMail, subject }).catch((err) => console.error('Failed to send guest appointment confirmation email:', err));
+        // Pass 16: same reasoning as the authenticated path above — non-blocking,
+        // .catch()-guarded, and now tracked as a real Notification row instead of
+        // leaving no trace beyond a console.error if it silently failed. Guest booking
+        // has no Patient row (recipientId stays null; see the schema comment on
+        // Notification.recipientId).
+        if (toMail) {
+            NotificationService.dispatchNotification({
+                recipientId: null,
+                recipientRole: 'guest',
+                recipientEmail: toMail,
+                event: 'appointment.scheduled',
+                subject,
+                pathName,
+                replacementObj,
+                relatedEntityType: 'Appointments',
+                relatedEntityId: appointment.id,
+            }).catch((err) => console.error('Failed to dispatch guest appointment confirmation notification:', err));
+        }
         const appointmentWithPayment = { ...appointment, payment: createdPayment };
         await recordIdempotentResponse(tx, idempotencyKey, appointmentWithPayment);
         return appointmentWithPayment;
@@ -565,7 +600,11 @@ const deleteAppointment = async (id: string): Promise<any> => {
 // already renders {{status}} dynamically, so it doubles as a generic "here's your
 // appointment's current state" notice without needing a second HTML file). Best-effort,
 // non-blocking — see the Pass 6 .catch() reasoning at every call site.
-const sendAppointmentStatusEmail = (appointment: any, subject: string, logLabel: string) => {
+// Pass 16: was a single EmailtTransporter call with `toMail` comma-joining patient and
+// doctor addresses (same issue as the booking-confirmation email above) — split into
+// per-recipient dispatches, and now tracked as real Notification rows via
+// NotificationService.dispatchNotification instead of a bare, untracked email send.
+const sendAppointmentStatusEmail = (appointment: any, subject: string, event: string) => {
     const pathName = path.join(__dirname, '../../../../template/appointment.html');
     const replacementObj = {
         created: moment(appointment.createdAt).format('LL'),
@@ -591,9 +630,32 @@ const sendAppointmentStatusEmail = (appointment: any, subject: string, logLabel:
         state: appointment?.patient?.state,
         country: appointment?.patient?.country
     };
-    const toMail = [appointment.email, appointment?.doctor?.email].filter(Boolean).join(',');
-    if (!toMail) return;
-    EmailtTransporter({ pathName, replacementObj, toMail, subject }).catch((err) => console.error(`Failed to send ${logLabel} email:`, err));
+    if (appointment.email) {
+        NotificationService.dispatchNotification({
+            recipientId: appointment.patientId ?? null,
+            recipientRole: appointment.patientId ? 'patient' : 'guest',
+            recipientEmail: appointment.email,
+            event,
+            subject,
+            pathName,
+            replacementObj,
+            relatedEntityType: 'Appointments',
+            relatedEntityId: appointment.id,
+        }).catch((err) => console.error(`Failed to dispatch ${event} notification (patient):`, err));
+    }
+    if (appointment?.doctor?.email) {
+        NotificationService.dispatchNotification({
+            recipientId: appointment.doctorId,
+            recipientRole: 'doctor',
+            recipientEmail: appointment.doctor.email,
+            event,
+            subject,
+            pathName,
+            replacementObj,
+            relatedEntityType: 'Appointments',
+            relatedEntityId: appointment.id,
+        }).catch((err) => console.error(`Failed to dispatch ${event} notification (doctor):`, err));
+    }
 }
 
 // Pass 9 — Cancellation & Rescheduling.
@@ -709,7 +771,7 @@ const cancelAppointment = async (reqUser: any, id: string, reason?: string): Pro
     sendAppointmentStatusEmail(
         result,
         `Appointment ${targetStatus === 'DECLINED' ? 'Declined' : 'Cancelled'} — Dr ${result?.doctor?.firstName} ${result?.doctor?.lastName}`,
-        'cancellation'
+        targetStatus === 'DECLINED' ? 'appointment.declined' : 'appointment.cancelled'
     );
 
     return { ...result, refund: refundResult ?? refundPlan };
@@ -795,7 +857,7 @@ const rescheduleAppointment = async (reqUser: any, id: string, newScheduleDate: 
     sendAppointmentStatusEmail(
         result,
         `Appointment Rescheduled — Dr ${result?.doctor?.firstName} ${result?.doctor?.lastName}`,
-        'reschedule'
+        'appointment.rescheduled'
     );
 
     return result;

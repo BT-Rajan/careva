@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml"
+    xmlns:o="urn:schemas-microsoft-com:office:office">
+
+<head>
+    <title>Careva Account Status</title>
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style type="text/css">
+        #outlook a { padding: 0; }
+        body { margin: 0; padding: 0; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }
+        table, td { border-collapse: collapse; mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
+        p { display: block; margin: 13px 0; }
+    </style>
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600&amp;display=swap" rel="stylesheet" type="text/css" />
+</head>
+
+<body style="background-color:#F4F5FB;">
+    <div style="background-color:#F4F5FB;padding:24px 0;">
+        <div style="margin:0px auto;background:#ffffff;border-radius:20px;max-width:600px;overflow:hidden;">
+            <table align="center" border="0" cellpadding="0" cellspacing="0" role="presentation" style="width:100%;">
+                <tbody>
+                    <tr>
+                        <td style="background:#6d28d9;padding:24px;text-align:center;">
+                            <div style="font-family:Montserrat, Helvetica, Arial, sans-serif;font-size:20px;font-weight:600;color:#ffffff;">Careva</div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td style="padding:28px 28px 8px 28px;">
+                            <div style="font-family:Montserrat, Helvetica, Arial, sans-serif;font-size:20px;font-weight:600;line-height:28px;color:#1f2430;">
+                                {{headline}}
+                            </div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td style="padding:8px 28px 4px 28px;">
+                            <div style="font-family:Montserrat, Helvetica, Arial, sans-serif;font-size:15px;font-weight:400;line-height:22px;color:#4b5266;">
+                                Dear Dr. {{doctorFirstName}} {{doctorLastName}},
+                            </div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td style="padding:4px 28px 20px 28px;">
+                            <div style="font-family:Montserrat, Helvetica, Arial, sans-serif;font-size:15px;font-weight:400;line-height:22px;color:#4b5266;">
+                                {{bodyText}}
+                            </div>
+                        </td>
+                    </tr>
+                    {{#if reason}}
+                    <tr>
+                        <td style="padding:0 28px 20px 28px;">
+                            <div style="font-family:Montserrat, Helvetica, Arial, sans-serif;font-size:14px;font-weight:400;line-height:20px;color:#8189A9;background:#F4F5FB;border-radius:8px;padding:12px 16px;">
+                                <strong style="color:#4b5266;">Note:</strong> {{reason}}
+                            </div>
+                        </td>
+                    </tr>
+                    {{/if}}
+                    <tr>
+                        <td style="padding:8px 28px 28px 28px;">
+                            <div style="font-family:Montserrat, Helvetica, Arial, sans-serif;font-size:13px;font-weight:400;line-height:20px;color:#8189A9;">
+                                — The Careva Team
+                            </div>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</body>
+
+</html>

@@ -14,6 +14,7 @@ import { MedicineRouter } from '../modules/medicines/medicine.route';
 import { ContactRouter } from '../modules/contact/contact.route';
 import { PaymentRouter } from '../modules/payment/payment.route';
 import { InvoiceRouter } from '../modules/invoice/invoice.route';
+import { NotificationRouter } from '../modules/notification/notification.route';
 
 const router = express.Router();
 
@@ -71,6 +72,10 @@ const moduleRoutes = [
     {
         path: '/invoice',
         route: InvoiceRouter
+    },
+    {
+        path: '/notification',
+        route: NotificationRouter
     }
 ]
 moduleRoutes.forEach((route) => router.use(route.path, route.route));

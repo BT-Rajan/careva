@@ -612,6 +612,82 @@ model AuditLog {
   @@map("AuditLog")
 }
 
+// Pass 16 — Notifications. Every prior pass that added a user-facing email
+// (booking/cancellation confirmations — Pass 6/9; doctor verification/approval —
+// Pass 10; password reset — pre-dates the pass system) fired it as a bare, untracked
+// `EmailtTransporter(...)` call: fire-and-forget with no persisted record of whether it
+// was ever actually delivered, and — worse — three of those six call sites weren't even
+// safely non-blocking (see notification.service.ts's dispatchNotification for what that
+// means and which three). This model is what makes a notification a real, queryable
+// fact instead of a side effect that leaves no trace if it silently fails.
+//
+// Multi-channel-**ready**, not multi-channel-built: `channel` exists as a field and
+// `NotificationChannel` as an enum with one member. This app has exactly one real
+// delivery mechanism wired up (Gmail SMTP via nodemailer, see
+// api/src/helpers/Transporter.ts) — no SMS/push provider integration exists anywhere in
+// the codebase. Modeling channel as an open enum rather than hardcoding "this is an
+// email log" costs nothing now and means adding SMS/push later is a new enum value and
+// a new sender, not a schema migration. Inventing a fake SMS/push integration with no
+// real provider behind it would be speculative, not multi-channel support.
+model Notification {
+  id String @id @default(uuid())
+
+  // Polymorphic recipient reference, same convention as Auth.userId (Pass 2) — points
+  // at a Patient or Doctor row depending on recipientRole, or is null for a guest
+  // (unauthenticated booking) who has no account row at all. recipientEmail is always
+  // set regardless — it's the actual address a send was attempted against, snapshotted
+  // at dispatch time so it stays accurate even if the recipient's account email
+  // changes afterward.
+  recipientId    String?
+  recipientRole  String
+  recipientEmail String
+
+  channel NotificationChannel @default(EMAIL)
+
+  // A stable, greppable key like "appointment.scheduled" or "doctor.approval_status_changed"
+  // — not a freeform description. Lets a future caller ask "did this patient get their
+  // cancellation email" without parsing subject lines.
+  event   String
+  subject String
+
+  // Pass 16: persisted so a retry (see notification.service.ts's retryNotification) can
+  // resend the exact original content without the caller having to reconstruct the
+  // render context (re-fetching and reassembling the same appointment/doctor/patient
+  // object shape a template expects is fragile and drifts as templates change) —
+  // everything needed to resend is on this row already.
+  templatePath String
+  templateData Json
+
+  status    NotificationStatus @default(PENDING)
+  attempts  Int                @default(0)
+  lastError String?
+  sentAt    DateTime?
+
+  // What this notification is about, same pattern as AuditLog's entityType/entityId —
+  // lets a support agent pull "every notification sent about appointment X" without a
+  // separate join table.
+  relatedEntityType String?
+  relatedEntityId   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([recipientId, recipientRole])
+  @@index([status])
+  @@index([relatedEntityType, relatedEntityId])
+  @@map("Notification")
+}
+
+enum NotificationChannel {
+  EMAIL
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
 enum UserRole {
   admin
   patient
