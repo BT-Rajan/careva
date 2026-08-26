@@ -3,6 +3,8 @@ import { DoctorController } from './doctor.controller';
 import { AuthUser } from '../../../enums';
 import { auth } from '../../middlewares/auth';
 import { CloudinaryHelper } from '../../../helpers/uploadHelper';
+import validateRequest from '../../middlewares/validateRequest';
+import { DoctorValidation } from './doctor.validation';
 
 const router = express.Router();
 
@@ -12,7 +14,7 @@ router.get('/', DoctorController.getAllDoctors);
 // APPROVED only (see doctor.service.ts), so admin needs a separate way to see doctors
 // still pending review. Registered before /:id so "admin" is never captured as an id.
 router.get('/admin/all', auth(AuthUser.ADMIN), DoctorController.getAllDoctorsForAdmin);
-router.post('/', DoctorController.createDoctor);
+router.post('/', validateRequest(DoctorValidation.CreateDoctorValidation), DoctorController.createDoctor);
 router.get('/:id', DoctorController.getDoctor);
 router.delete('/:id', auth(AuthUser.DOCTOR, AuthUser.ADMIN), DoctorController.deleteDoctor);
 router.patch('/:id',

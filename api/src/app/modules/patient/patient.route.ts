@@ -3,6 +3,8 @@ import { PatientController } from './patient.controller';
 import { auth } from '../../middlewares/auth';
 import { AuthUser } from '../../../enums';
 import { CloudinaryHelper } from '../../../helpers/uploadHelper';
+import validateRequest from '../../middlewares/validateRequest';
+import { PatientValidation } from './patient.validation';
 
 const router = express.Router();
 
@@ -11,7 +13,7 @@ const router = express.Router();
 // admin dashboard); GET /:id and DELETE /:id are confirmed unused by the frontend today,
 // but were still live, reachable, unauthenticated endpoints.
 router.get('/', auth(AuthUser.ADMIN), PatientController.getAllPatients);
-router.post('/', PatientController.createPatient);
+router.post('/', validateRequest(PatientValidation.CreatePatientValidation), PatientController.createPatient);
 router.get('/:id', auth(AuthUser.ADMIN, AuthUser.PATIENT), PatientController.getPatient);
 router.delete('/:id', auth(AuthUser.ADMIN), PatientController.deletePatient);
 router.patch('/:id/reactivate', auth(AuthUser.ADMIN), PatientController.reactivatePatient);

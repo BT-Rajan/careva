@@ -2,6 +2,8 @@ import express from 'express';
 import { auth } from '../../middlewares/auth';
 import { AuthUser } from '../../../enums';
 import { PrescriptionController } from './prescription.controller';
+import validateRequest from '../../middlewares/validateRequest';
+import { PrescriptionValidation } from './prescription.validation';
 
 const router = express.Router();
 
@@ -14,7 +16,7 @@ router.get('/patient/prescription', auth(AuthUser.PATIENT), PrescriptionControll
 router.get('/:id', auth(AuthUser.DOCTOR, AuthUser.PATIENT, AuthUser.ADMIN), PrescriptionController.getPrescriptionById);
 router.get('/', auth(AuthUser.ADMIN), PrescriptionController.getAllPrescriptions);
 
-router.post('/create', auth(AuthUser.DOCTOR, AuthUser.ADMIN), PrescriptionController.createPrescription);
+router.post('/create', auth(AuthUser.DOCTOR, AuthUser.ADMIN), validateRequest(PrescriptionValidation.CreatePrescriptionValidation), PrescriptionController.createPrescription);
 
 // Pass 4 BUG FIX: this was `router.delete('/:', ...)` — a route-path typo (missing the
 // param name) meant `req.params.id` was always undefined, so delete-prescription — a

@@ -2,7 +2,11 @@ import express, { Application, NextFunction, Request, Response } from 'express';
 import cors from 'cors';
 import CookieParser from 'cookie-parser';
 import httpStatus from 'http-status';
+import { ZodError } from 'zod';
+import { Prisma } from '@prisma/client';
 import ApiError from './errors/apiError';
+import handleZodError from './errors/handleZodError';
+import handlePrismaError from './errors/handlePrismaError';
 import router from './app/routes';
 import config from './config';
 
@@ -46,6 +50,22 @@ app.use((err: unknown, req: Request, res: Response, next: NextFunction) => {
         return res
             .status(err.statusCode)
             .json({ success: false, message: err.message });
+    }
+    // Pass 17 — API Contract. Two error types that could always be thrown (Zod, once
+    // validateRequest actually started throwing them; Prisma's known-request errors,
+    // always possible from any service function) previously had no dedicated branch
+    // here at all and fell straight into the generic fallback below — a ZodError's
+    // carefully-structured per-field issues, or a Prisma unique-constraint violation,
+    // both collapsed into either a raw dumped message or an opaque 500. handleZodError
+    // already existed (unused) for exactly this; handlePrismaError is this pass's new
+    // equivalent for the ORM this app actually uses.
+    if (err instanceof ZodError) {
+        const { statusCode, message, errorMessages } = handleZodError(err);
+        return res.status(statusCode).json({ success: false, message, errorMessages });
+    }
+    if (err instanceof Prisma.PrismaClientKnownRequestError) {
+        const { statusCode, message, errorMessages } = handlePrismaError(err);
+        return res.status(statusCode).json({ success: false, message, errorMessages });
     }
     const e = err as { statusCode?: number; message?: string; stack?: string; name?: string };
     const statusCode =

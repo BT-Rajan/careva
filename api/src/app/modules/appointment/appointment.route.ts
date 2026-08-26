@@ -2,6 +2,8 @@ import express from 'express';
 import { auth } from '../../middlewares/auth';
 import { AuthUser } from '../../../enums';
 import { AppointmentController } from './appointment.controller';
+import validateRequest from '../../middlewares/validateRequest';
+import { AppointmentValidation } from './appointment.validation';
 
 const router = express.Router();
 
@@ -32,9 +34,9 @@ router.get('/doctor/patients',auth(AuthUser.DOCTOR), AppointmentController.getDo
 // trackingId — a cryptographically random token (see shared/trackingId.ts), not the raw
 // database id. See AppointmentService.getAppointmentByTrackingId for the deliberately
 // curated (not "every column") response shape this returns.
-router.post('/tracking', AppointmentController.getAppointmentByTrackingId);
-router.post('/create', AppointmentController.createAppointment);
-router.post('/create-un-authenticate', AppointmentController.createAppointmentByUnAuthenticateUser);
+router.post('/tracking', validateRequest(AppointmentValidation.TrackAppointmentValidation), AppointmentController.getAppointmentByTrackingId);
+router.post('/create', validateRequest(AppointmentValidation.CreateAppointmentValidation), AppointmentController.createAppointment);
+router.post('/create-un-authenticate', validateRequest(AppointmentValidation.CreateAppointmentByUnAuthenticateUserValidation), AppointmentController.createAppointmentByUnAuthenticateUser);
 
 // Pass 15 — Tracking & Public Access: now requires auth + ownership (see
 // AppointmentService.getAppointment). The one legitimate unauthenticated use this
