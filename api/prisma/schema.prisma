@@ -405,10 +405,39 @@ model Reviews {
   isRecommended Boolean?
   response      String?
 
+  // Pass 21 — Admin & Operational Controls. Target model from
+  // docs/passes/01-domain-state-model.md §4.6: "SUBMITTED → PUBLISHED, with FLAGGED and
+  // REMOVED as admin-moderation states." Every review used to be created and
+  // immediately, permanently visible with no moderation step at all (Gap G8).
+  //
+  // Defaults to PUBLISHED here, not SUBMITTED — that default only governs what an
+  // EXISTING row (or one created by a raw script bypassing application code) becomes;
+  // it is what correctly grandfathers in every review that predates this column rather
+  // than making them all vanish from every doctor's profile the moment this migration
+  // runs. New reviews created through the real application path
+  // (reviews.service.ts's `create`) explicitly set `status: 'SUBMITTED'`, overriding
+  // this default — see that function's own comment for why moderation happens there,
+  // not here.
+  status ReviewStatus @default(PUBLISHED)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@index([status])
   @@map("Reviews")
+}
+
+// Pass 21 — Admin & Operational Controls. See the Reviews model above. REMOVED is not
+// modeled as fully terminal — unlike Invoice's VOID or Prescription's CORRECTED, an
+// admin restoring a review removed by mistake is a real, plausible moderation action
+// (there's no equivalent "undo" need for a voided financial document or a superseded
+// prescription version), so REMOVED → PUBLISHED is a legal transition. See
+// review-lifecycle.ts for the full transition graph.
+enum ReviewStatus {
+  SUBMITTED
+  PUBLISHED
+  FLAGGED
+  REMOVED
 }
 
 model Prescription {

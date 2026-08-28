@@ -413,11 +413,75 @@ const refundPayment = async (reqUser: any, paymentId: string, amountMinor: numbe
     }
 }
 
+// Pass 21 — Admin & Operational Controls. Closes the gap Pass 20 explicitly flagged:
+// PaymentStatus.UNKNOWN_RECONCILING (added in Pass 7, first actually triggered by Pass
+// 20's optimistic-concurrency check) had no admin-facing way to see or resolve payments
+// stuck in it. This is deliberately a human-in-the-loop action, not automated
+// reconciliation — an admin checks the payment gateway's own dashboard directly to see
+// what really happened, then tells this app what the true final state is. Building
+// real automated reconciliation (polling the gateway's API to resolve these
+// automatically) is a larger feature this pass does not attempt.
+const getReconciliationQueue = async (reqUser: any): Promise<Payment[]> => {
+    if (reqUser?.role !== 'admin') {
+        throw new ApiError(httpStatus.FORBIDDEN, 'Only an admin can view the payment reconciliation queue !!');
+    }
+    return prisma.payment.findMany({
+        where: { status: PaymentStatus.UNKNOWN_RECONCILING },
+        orderBy: { updatedAt: 'desc' },
+        include: {
+            appointment: {
+                select: { trackingId: true, scheduleDate: true, scheduleTime: true, patientId: true, doctorId: true }
+            }
+        }
+    });
+}
+
+const RESOLVABLE_STATUSES = [PaymentStatus.SUCCEEDED, PaymentStatus.FAILED, PaymentStatus.REFUNDED, PaymentStatus.PARTIALLY_REFUNDED] as const;
+
+const resolveReconciliation = async (reqUser: any, paymentId: string, resolvedStatus: PaymentStatus, note: string): Promise<Payment> => {
+    if (reqUser?.role !== 'admin') {
+        throw new ApiError(httpStatus.FORBIDDEN, 'Only an admin can resolve a reconciliation !!');
+    }
+    if (!RESOLVABLE_STATUSES.includes(resolvedStatus as any)) {
+        throw new ApiError(httpStatus.BAD_REQUEST, `resolvedStatus must be one of: ${RESOLVABLE_STATUSES.join(', ')}`);
+    }
+    if (!note || !note.trim()) {
+        throw new ApiError(httpStatus.BAD_REQUEST, 'A note explaining what was found at the gateway is required.');
+    }
+    const payment = await prisma.payment.findUnique({ where: { id: paymentId } });
+    if (!payment) {
+        throw new ApiError(httpStatus.NOT_FOUND, 'Payment record is not found !!');
+    }
+    if (payment.status !== PaymentStatus.UNKNOWN_RECONCILING) {
+        throw new ApiError(httpStatus.CONFLICT, 'This payment is not awaiting reconciliation !!');
+    }
+    const result = await prisma.$transaction(async (tx) => {
+        const updated = await tx.payment.update({
+            where: { id: paymentId },
+            data: { status: resolvedStatus, failureReason: note }
+        });
+        await tx.auditLog.create({
+            data: {
+                actorId: reqUser?.userId,
+                actorRole: 'admin',
+                action: 'payment.reconciliation_resolved',
+                entityType: 'Payment',
+                entityId: paymentId,
+                metadata: { from: 'UNKNOWN_RECONCILING', to: resolvedStatus, note },
+            }
+        });
+        return updated;
+    });
+    return result;
+}
+
 export const PaymentService = {
     createProviderOrderForPayment,
     verifyAndFinalizePayment,
     handleWebhook,
     refundPayment,
     processRefund,
+    getReconciliationQueue,
+    resolveReconciliation,
 }
 

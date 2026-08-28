@@ -1,33 +1,56 @@
 import React, { useState } from 'react';
 import AdminLayout from '../AdminLayout/AdminLayout';
 import { Table, Card, Rate, Button, Modal, message, Avatar, Space, Tag, Input } from 'antd';
-import { FaUser, FaUserMd, FaTrash, FaEye } from 'react-icons/fa';
-import { useGetAllReviewsQuery, useDeleteReviewQuery } from '../../../redux/api/reviewsApi';
+import { FaUser, FaUserMd, FaTrash, FaEye, FaCheck, FaFlag, FaBan } from 'react-icons/fa';
+import { useGetAllReviewsForAdminQuery, useDeleteReviewMutation, usePublishReviewMutation, useFlagReviewMutation, useRemoveReviewMutation } from '../../../redux/api/reviewsApi';
 import moment from 'moment';
 import './Reviews.css';
+
+const STATUS_TAG_COLOR = { SUBMITTED: 'gold', PUBLISHED: 'green', FLAGGED: 'orange', REMOVED: 'red' };
 
 const AdminReviews = () => {
     const [page, setPage] = useState(1);
     const [pageSize, setPageSize] = useState(10);
 
-    const { data, isLoading, refetch } = useGetAllReviewsQuery({ limit: pageSize, page });
-    
+    // Pass 21 — Admin & Operational Controls: this page's whole purpose is moderating
+    // reviews, so it needs the admin queue (every status), not the public PUBLISHED-only
+    // listing it was calling before.
+    const { data, isLoading, refetch } = useGetAllReviewsForAdminQuery({ limit: pageSize, page });
+    const [deleteReview, { isLoading: deleteLoading }] = useDeleteReviewMutation();
+    const [publishReview, { isLoading: publishLoading }] = usePublishReviewMutation();
+    const [flagReview, { isLoading: flagLoading }] = useFlagReviewMutation();
+    const [removeReview, { isLoading: removeLoading }] = useRemoveReviewMutation();
+
     const reviews = data?.data || [];
     const meta = data?.meta || {};
 
     const handleDelete = (id) => {
         Modal.confirm({
             title: 'Delete Review',
-            content: 'Are you sure you want to delete this review?',
+            content: 'Are you sure you want to permanently delete this review? This cannot be undone — consider "Remove" instead if you may want to restore it later.',
             onOk: async () => {
                 try {
-                    message.info('Delete review API needs proper implementation');
+                    // Pass 21 BUG FIX: this used to be a stub (`message.info('Delete
+                    // review API needs proper implementation')`) — the mutation hook
+                    // was imported but never actually called, because it was
+                    // previously misclassified as a `build.query` (see reviewsApi.js).
+                    await deleteReview(id).unwrap();
+                    message.success('Review deleted successfully!');
                     refetch();
                 } catch (error) {
-                    message.error('Failed to delete review');
+                    message.error(error?.data?.message || 'Failed to delete review');
                 }
             },
         });
+    };
+
+    const handleModerate = async (action, id) => {
+        try {
+            await action({ id }).unwrap();
+            message.success('Review updated!');
+        } catch (error) {
+            message.error(error?.data?.message || 'Failed to update review');
+        }
     };
 
     const handleViewDetails = (record) => {
@@ -105,12 +128,24 @@ const AdminReviews = () => {
             ellipsis: true,
         },
         {
-            title: 'Status',
+            // Pass 21: this used to be labeled "Status" but actually showed whether the
+            // doctor had replied ("Replied"/"Pending") — not a moderation status at
+            // all, and there was no real one to show before this pass. Split into two
+            // honestly-labeled columns.
+            title: 'Moderation',
             key: 'status',
             width: 120,
             render: (_, record) => (
-                <Tag color={record.reply ? 'green' : 'orange'}>
-                    {record.reply ? 'Replied' : 'Pending'}
+                <Tag color={STATUS_TAG_COLOR[record.status] || 'default'}>{record.status}</Tag>
+            ),
+        },
+        {
+            title: 'Doctor Reply',
+            key: 'reply',
+            width: 110,
+            render: (_, record) => (
+                <Tag color={record.response ? 'green' : 'default'}>
+                    {record.response ? 'Replied' : 'None'}
                 </Tag>
             ),
         },
@@ -124,20 +159,53 @@ const AdminReviews = () => {
         {
             title: 'Actions',
             key: 'actions',
-            width: 120,
+            width: 220,
             fixed: 'right',
             render: (_, record) => (
-                <Space>
+                <Space wrap>
                     <Button
                         type="link"
                         icon={<FaEye />}
                         onClick={() => handleViewDetails(record)}
                         size="small"
                     />
+                    {(record.status === 'SUBMITTED' || record.status === 'FLAGGED') && (
+                        <Button
+                            type="link"
+                            icon={<FaCheck />}
+                            title="Publish"
+                            loading={publishLoading}
+                            onClick={() => handleModerate(publishReview, record.id)}
+                            size="small"
+                        />
+                    )}
+                    {record.status === 'PUBLISHED' && (
+                        <Button
+                            type="link"
+                            icon={<FaFlag />}
+                            title="Flag"
+                            loading={flagLoading}
+                            onClick={() => handleModerate(flagReview, record.id)}
+                            size="small"
+                        />
+                    )}
+                    {record.status !== 'REMOVED' && (
+                        <Button
+                            type="link"
+                            danger
+                            icon={<FaBan />}
+                            title="Remove"
+                            loading={removeLoading}
+                            onClick={() => handleModerate(removeReview, record.id)}
+                            size="small"
+                        />
+                    )}
                     <Button
                         type="link"
                         danger
                         icon={<FaTrash />}
+                        title="Delete permanently"
+                        loading={deleteLoading}
                         onClick={() => handleDelete(record.id)}
                         size="small"
                     />

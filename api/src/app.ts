@@ -10,6 +10,7 @@ import handleZodError from './errors/handleZodError';
 import handlePrismaError from './errors/handlePrismaError';
 import router from './app/routes';
 import config from './config';
+import prisma from './shared/prisma';
 
 const app: Application = express();
 
@@ -76,6 +77,23 @@ app.get('/favicon.ico', (req: Request, res: Response) => {
 
 app.get('/', (req: Request, res: Response) => {
     res.send(config.clientUrl)
+})
+
+// Pass 21 — Admin & Operational Controls. Deliberately mounted at the bare root, not
+// under /api/v1 — an orchestrator's health check (Docker, Kubernetes, a load balancer)
+// shouldn't need to know this API's versioning scheme just to ask "are you up." Checks
+// real database connectivity (a lightweight query), not just "the Node process is
+// running" — a process that's up but can't reach Postgres should NOT be reported
+// healthy, since it can't actually serve any real request. Pass 18 already classifies
+// a Prisma connection failure as 503 in the global error handler; this does the
+// equivalent check proactively rather than waiting for a real request to reveal it.
+app.get('/health', async (req: Request, res: Response) => {
+    try {
+        await prisma.$queryRaw`SELECT 1`;
+        res.status(200).json({ status: 'ok', database: 'connected', timestamp: new Date().toISOString() });
+    } catch (error) {
+        res.status(503).json({ status: 'degraded', database: 'unreachable', timestamp: new Date().toISOString() });
+    }
 })
 
 app.use('/api/v1', router);

@@ -10,6 +10,12 @@ router.post('/:paymentId/checkout', auth(AuthUser.PATIENT, AuthUser.DOCTOR, Auth
 router.post('/:paymentId/verify', auth(AuthUser.PATIENT, AuthUser.DOCTOR, AuthUser.ADMIN), PaymentController.verifyPayment);
 router.post('/:paymentId/refund', auth(AuthUser.ADMIN), PaymentController.refund);
 
+// Pass 21 — Admin & Operational Controls. Registered before /:paymentId/... routes
+// isn't actually necessary here (different literal path), but grouped together for
+// readability — these are the two reconciliation-queue endpoints Pass 20 flagged.
+router.get('/reconciliation', auth(AuthUser.ADMIN), PaymentController.getReconciliationQueue);
+router.patch('/:paymentId/resolve-reconciliation', auth(AuthUser.ADMIN), PaymentController.resolveReconciliation);
+
 // Telr redirects the browser here — no auth possible (see payment.controller.ts).
 router.get('/telr/return/success', PaymentController.telrReturn('success'));
 router.get('/telr/return/declined', PaymentController.telrReturn('declined'));

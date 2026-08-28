@@ -76,12 +76,56 @@ const replyReviewByDoctor = catchAsync(async (req: Request, res: Response) => {
     })
 })
 
+const getAllReviewsForAdmin = catchAsync(async (req: Request, res: Response) => {
+    const result = await ReviewService.getAllReviewsForAdmin(req.user, req.query);
+    sendResponse<Reviews[]>(res, {
+        statusCode: 200,
+        message: 'Successfully Retrieve review moderation queue !!',
+        success: true,
+        data: result,
+    })
+})
+
+const publishReview = catchAsync(async (req: Request, res: Response) => {
+    const result = await ReviewService.moderateReview(req.user, req.params.id, 'PUBLISHED', req.body?.reason);
+    sendResponse<Reviews>(res, {
+        statusCode: 200,
+        message: 'Successfully Published review !!',
+        success: true,
+        data: result,
+    })
+})
+
+const flagReview = catchAsync(async (req: Request, res: Response) => {
+    const result = await ReviewService.moderateReview(req.user, req.params.id, 'FLAGGED', req.body?.reason);
+    sendResponse<Reviews>(res, {
+        statusCode: 200,
+        message: 'Successfully Flagged review !!',
+        success: true,
+        data: result,
+    })
+})
+
+const removeReview = catchAsync(async (req: Request, res: Response) => {
+    const result = await ReviewService.moderateReview(req.user, req.params.id, 'REMOVED', req.body?.reason);
+    sendResponse<Reviews>(res, {
+        statusCode: 200,
+        message: 'Successfully Removed review !!',
+        success: true,
+        data: result,
+    })
+})
+
 export const ReviewController = {
     creatReview,
     updateReview,
     getAllReview,
+    getAllReviewsForAdmin,
     getDoctorReviews,
     deleteReview,
     getSingleReview,
-    replyReviewByDoctor
+    replyReviewByDoctor,
+    publishReview,
+    flagReview,
+    removeReview,
 }

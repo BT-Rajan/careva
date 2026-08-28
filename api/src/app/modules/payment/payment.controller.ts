@@ -100,10 +100,33 @@ const refund = catchAsync(async (req: Request, res: Response) => {
     })
 })
 
+const getReconciliationQueue = catchAsync(async (req: Request, res: Response) => {
+    const result = await PaymentService.getReconciliationQueue(req.user);
+    sendResponse(res, {
+        statusCode: 200,
+        message: 'Successfully retrieved reconciliation queue !!',
+        success: true,
+        data: result,
+    })
+})
+
+const resolveReconciliation = catchAsync(async (req: Request, res: Response) => {
+    const { resolvedStatus, note } = req.body;
+    const result = await PaymentService.resolveReconciliation(req.user, req.params.paymentId, resolvedStatus, note);
+    sendResponse(res, {
+        statusCode: 200,
+        message: 'Successfully resolved reconciliation !!',
+        success: true,
+        data: result,
+    })
+})
+
 export const PaymentController = {
     getCheckout,
     verifyPayment,
     telrReturn,
     webhook,
     refund,
+    getReconciliationQueue,
+    resolveReconciliation,
 }
