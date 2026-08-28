@@ -68,6 +68,21 @@ const loginUser = async (user: any): Promise<ILginResponse> => {
                 lockedUntil: shouldLock ? moment().add(ACCOUNT_LOCK_MINUTES, 'minutes').toDate() : null
             }
         });
+        // Pass 22 — Audit & Observability. Pass 3 built the failed-attempt counter and
+        // lockout, but nothing recorded WHEN a failed attempt happened or WHEN an
+        // account got locked — only the current count, which resets on the next
+        // success and carries no history. An admin investigating "was this account
+        // targeted" had literally nothing to look at.
+        await prisma.auditLog.create({
+            data: {
+                actorId: isUserExist.userId,
+                actorRole: isUserExist.role,
+                action: shouldLock ? 'auth.account_locked' : 'auth.failed_login',
+                entityType: 'Auth',
+                entityId: isUserExist.id,
+                metadata: { attempts, email: isUserExist.email },
+            }
+        });
         if (shouldLock) {
             throw new ApiError(httpStatus.FORBIDDEN, `Too many failed login attempts. Account locked for ${ACCOUNT_LOCK_MINUTES} minutes.`);
         }
@@ -80,6 +95,20 @@ const loginUser = async (user: any): Promise<ILginResponse> => {
             data: { failedLoginAttempts: 0, lockedUntil: null }
         });
     }
+    // Pass 22: the other half of the picture — a record of successful logins is what
+    // makes the failed-attempt trail above actually useful for investigation (e.g.
+    // "were there failed attempts immediately before this successful one, from a
+    // pattern that looks like the attacker eventually guessed right").
+    await prisma.auditLog.create({
+        data: {
+            actorId: isUserExist.userId,
+            actorRole: isUserExist.role,
+            action: 'auth.login_succeeded',
+            entityType: 'Auth',
+            entityId: isUserExist.id,
+            metadata: { email: isUserExist.email },
+        }
+    });
 
     const { role, userId, isDemo, email: userEmail } = isUserExist;
     const accessToken = JwtHelper.createToken(

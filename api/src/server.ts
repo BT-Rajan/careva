@@ -2,6 +2,7 @@ import { Server } from 'http';
 import app from "./app";
 import config from './config';
 import prisma from './shared/prisma';
+import { errorlogger } from './shared/logger';
 
 let server: Server;
 
@@ -44,7 +45,12 @@ async function bootstrap() {
     // a timeout if a normal shutdown hangs (e.g. a slow client keeping a connection
     // open) rather than blocking a deploy indefinitely.
     const gracefulShutdown = (reason: string, error: unknown, exitCode: number) => {
-        console.error(`[shutdown] ${reason}`, error ?? '');
+        // Pass 22 — Audit & Observability: this is precisely the diagnostic trace Pass
+        // 18 fixed to actually be captured at all (the crash handler used to discard
+        // the error entirely). Persisting it to a rotated log file, not just stdout,
+        // is what makes it possible to actually investigate a crash after the fact —
+        // stdout is gone the moment the process that crashed is gone.
+        errorlogger.error(`[shutdown] ${reason} :: ${error instanceof Error ? error.stack ?? error.message : String(error ?? '')}`);
 
         const forceExitTimer = setTimeout(() => {
             console.error('[shutdown] Graceful shutdown timed out after 10s — forcing exit.');

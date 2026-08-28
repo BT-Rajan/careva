@@ -11,6 +11,7 @@ import handlePrismaError from './errors/handlePrismaError';
 import router from './app/routes';
 import config from './config';
 import prisma from './shared/prisma';
+import { errorlogger } from './shared/logger';
 
 const app: Application = express();
 
@@ -102,7 +103,13 @@ app.use((err: unknown, req: Request, res: Response, next: NextFunction) => {
     if (res.headersSent) {
         return next(err);
     }
-    console.error('[api error]', req.method, req.originalUrl, err);
+    // Pass 22 — Audit & Observability BUG FIX: was `console.error` only — every error
+    // this API has ever produced vanished the moment stdout scrolled away or the
+    // process restarted. `errorlogger` (shared/logger.ts) was fully configured with
+    // disk-persisted, rotated log files since before this pass, but was never actually
+    // imported anywhere. This is the highest-value place to start using it: every
+    // error that reaches this point, across the entire API, now survives a restart.
+    errorlogger.error(`[api error] ${req.method} ${req.originalUrl} :: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
     if (err instanceof ApiError) {
         return res
             .status(err.statusCode)

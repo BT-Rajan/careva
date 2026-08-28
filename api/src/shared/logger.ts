@@ -14,9 +14,17 @@ const myFormat = printf(({ level, message, label, timestamp }) => {
   return `${date.toDateString()} ${hour}:${minutes}:${seconds} } [${label}] ${level}: ${message}`;
 });
 
+// Pass 22 — Audit & Observability BUG FIX: this whole file — logger, errorlogger, the
+// daily-rotate-file setup, even the "PH" label below — was fully configured but never
+// actually imported anywhere else in the codebase. Every log line in this app, from
+// `server.ts`'s crash handler to every service function's `console.error`, was going
+// to ephemeral stdout only: nothing persisted once a process restarted or a terminal
+// scrolled away. "PH" (now "Careva") is a leftover label from whatever starter
+// template this project began from — the same class of dead, uncustomized boilerplate
+// Pass 17 found in the two Mongoose-era error handlers.
 const logger = createLogger({
   level: 'info',
-  format: combine(label({ label: 'PH' }), timestamp(), myFormat),
+  format: combine(label({ label: 'Careva' }), timestamp(), myFormat),
   transports: [
     new transports.Console(),
     new DailyRotateFile({
@@ -25,7 +33,7 @@ const logger = createLogger({
         'logs',
         'winston',
         'successes',
-        'phu-%DATE%-success.log'
+        'careva-%DATE%-success.log'
       ),
       datePattern: 'YYYY-DD-MM-HH',
       zippedArchive: true,
@@ -37,7 +45,7 @@ const logger = createLogger({
 
 const errorlogger = createLogger({
   level: 'error',
-  format: combine(label({ label: 'PH' }), timestamp(), myFormat),
+  format: combine(label({ label: 'Careva' }), timestamp(), myFormat),
   transports: [
     new transports.Console(),
     new DailyRotateFile({
@@ -46,7 +54,7 @@ const errorlogger = createLogger({
         'logs',
         'winston',
         'errors',
-        'phu-%DATE%-error.log'
+        'careva-%DATE%-error.log'
       ),
       datePattern: 'YYYY-DD-MM-HH',
       zippedArchive: true,
