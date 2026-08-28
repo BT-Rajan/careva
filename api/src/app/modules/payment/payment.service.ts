@@ -13,7 +13,7 @@
  * (network blip, server restart), the booking itself is NOT lost — it's retried via the
  * same idempotent function, not by re-running the whole booking.
  */
-import { Currency, Payment, PaymentStatus } from '@prisma/client';
+import { Currency, Payment, PaymentStatus, Prisma } from '@prisma/client';
 import prisma from '../../../shared/prisma';
 import ApiError from '../../../errors/apiError';
 import httpStatus from 'http-status';
@@ -185,14 +185,31 @@ const handleWebhook = async (providerName: 'razorpay' | 'telr', rawBody: string,
         throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid webhook body !!');
     }
 
-    await prisma.paymentWebhookEvent.create({
-        data: {
-            provider: providerName,
-            providerEventId,
-            eventType: verification.eventType ?? 'unknown',
-            payload: parsed,
+    // Pass 20 — Concurrency & Idempotency BUG FIX: the `findUnique` check above and this
+    // `create` were two separate, non-atomic calls — a classic time-of-check-to-time-of-
+    // use race. Gateways commonly deliver the same webhook twice in close succession
+    // (that's the entire reason PaymentWebhookEvent's unique constraint exists), and two
+    // near-simultaneous deliveries could both pass the `findUnique` check before either
+    // had inserted its row. The loser then hit the unique constraint on `create` itself —
+    // which, before this pass, propagated as an uncaught error instead of the graceful
+    // "already processed" this function is supposed to return for exactly this
+    // situation. A gateway receiving a non-2xx for what should be a successful duplicate
+    // acknowledgment would likely just retry again, indefinitely.
+    try {
+        await prisma.paymentWebhookEvent.create({
+            data: {
+                provider: providerName,
+                providerEventId,
+                eventType: verification.eventType ?? 'unknown',
+                payload: parsed,
+            }
+        });
+    } catch (err) {
+        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+            return { status: 'already_processed' };
         }
-    });
+        throw err;
+    }
 
     // Razorpay's payload nests entity data under payload.payment.entity — see
     // payload.contains for which entities are present per event type. The webhook
@@ -248,6 +265,52 @@ const handleWebhook = async (providerName: 'razorpay' | 'telr', rawBody: string,
 // cancellation cutoff policy, not by an arbitrary admin request. refundPayment (the
 // admin API endpoint) wraps this with its own role/eligibility checks for manual
 // refunds; this function does the actual gateway call + bookkeeping either way.
+// Pass 20 — Concurrency & Idempotency. Reuses the exact IdempotencyKey table Pass 2
+// laid down for this and Pass 6 first wired up for booking — same "claim, then fill in
+// the response" idea, adapted for a flow that (unlike booking) makes a slow external
+// call in the middle, so the claim and the gateway call can't share one DB transaction
+// the way booking's insert-and-record can.
+//
+// The claim step (bare `create`, not check-then-create) is what actually closes the
+// race: two requests with the SAME key racing to create the same row can only have one
+// winner — Postgres's own unique constraint decides that, not application logic that
+// could have its own gap. The loser either replays a completed sibling's response, or
+// — if it got there before the winner finished — is told plainly that a duplicate
+// request is already in flight, rather than being allowed to also call the gateway.
+const claimIdempotencyKey = async (key: string | undefined): Promise<{ replay: any } | null> => {
+    if (!key) return null;
+    const existing = await prisma.idempotencyKey.findUnique({ where: { key } });
+    if (existing) {
+        if (existing.response !== null && existing.response !== undefined) {
+            return { replay: existing.response };
+        }
+        throw new ApiError(httpStatus.CONFLICT, 'A request with this idempotency key is already being processed.');
+    }
+    try {
+        await prisma.idempotencyKey.create({ data: { key } });
+    } catch (err) {
+        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+            throw new ApiError(httpStatus.CONFLICT, 'A request with this idempotency key is already being processed.');
+        }
+        throw err;
+    }
+    return null;
+}
+
+const finalizeIdempotencyKey = async (key: string | undefined, response: any): Promise<void> => {
+    if (!key) return;
+    const safeResponse = JSON.parse(JSON.stringify(response));
+    await prisma.idempotencyKey.update({ where: { key }, data: { response: safeResponse, statusCode: 200 } });
+}
+
+// A failed attempt didn't actually charge/refund anything real — the claim row must not
+// permanently block a retry with the same key, or a single transient gateway failure
+// would leave that idempotency key unusable forever.
+const releaseIdempotencyKeyOnFailure = async (key: string | undefined): Promise<void> => {
+    if (!key) return;
+    await prisma.idempotencyKey.delete({ where: { key } }).catch(() => {});
+}
+
 const processRefund = async (paymentId: string, amountMinor: number, reason?: string): Promise<Payment> => {
     const payment = await prisma.payment.findUnique({ where: { id: paymentId } });
     if (!payment) {
@@ -284,13 +347,40 @@ const processRefund = async (paymentId: string, amountMinor: number, reason?: st
 
     const newRefundedTotal = alreadyRefunded + amountMinor;
     const isFullRefund = newRefundedTotal >= payment.totalAmount;
-    const updated = await prisma.payment.update({
-        where: { id: payment.id },
+    // Pass 20 — Concurrency & Idempotency BUG FIX: this used to be an unconditional
+    // `update` based on `alreadyRefunded`/`payment.status` read at the TOP of this
+    // function — but the gateway call above is slow, and nothing stopped a second,
+    // DIFFERENTLY-idempotency-keyed refund request (a genuinely separate admin action,
+    // not a retry of this one — the claim above only protects against duplicates of
+    // THIS SAME request) from reading the same stale `payment` row and racing to update
+    // it too. `updateMany` with `refundedAmount`/`status` in the WHERE clause is an
+    // optimistic-concurrency check: it only succeeds if the row still looks exactly like
+    // what this function read before calling the gateway. If 0 rows match, someone else's
+    // refund committed in between.
+    //
+    // Critically, by this point the gateway call already succeeded — the money has
+    // genuinely moved. Silently retrying or discarding that fact would be worse than the
+    // race itself. UNKNOWN_RECONCILING (added in Pass 7 for exactly this "gateway
+    // succeeded but our own bookkeeping is now uncertain" situation) records that a real
+    // refund happened and flags it for manual reconciliation, rather than guessing.
+    const updateResult = await prisma.payment.updateMany({
+        where: { id: payment.id, refundedAmount: payment.refundedAmount, status: payment.status },
         data: {
             refundedAmount: newRefundedTotal,
             status: isFullRefund ? PaymentStatus.REFUNDED : PaymentStatus.PARTIALLY_REFUNDED,
         }
     });
+    if (updateResult.count === 0) {
+        await prisma.payment.update({
+            where: { id: payment.id },
+            data: {
+                status: PaymentStatus.UNKNOWN_RECONCILING,
+                failureReason: `Refund of ${amountMinor} succeeded at the gateway, but local bookkeeping could not be applied cleanly (concurrent update detected). Needs manual reconciliation.`,
+            }
+        });
+        throw new ApiError(httpStatus.CONFLICT, 'This refund was processed at the payment gateway, but a concurrent update prevented recording it cleanly. This has been flagged for manual reconciliation — do not retry.');
+    }
+    const updated = await prisma.payment.findUniqueOrThrow({ where: { id: payment.id } });
     // Pass 14: a fully-refunded payment's invoice is voided — the money has been
     // returned, so the document is no longer a valid record of an amount owed/paid.
     // A partial refund deliberately does NOT void the invoice: this app has no
@@ -305,11 +395,22 @@ const processRefund = async (paymentId: string, amountMinor: number, reason?: st
     return updated;
 }
 
-const refundPayment = async (reqUser: any, paymentId: string, amountMinor: number, reason?: string): Promise<Payment> => {
+const refundPayment = async (reqUser: any, paymentId: string, amountMinor: number, reason?: string, idempotencyKey?: string): Promise<Payment> => {
     if (reqUser?.role !== 'admin') {
         throw new ApiError(httpStatus.FORBIDDEN, 'Only an admin can issue a refund !!');
     }
-    return processRefund(paymentId, amountMinor, reason);
+    const claim = await claimIdempotencyKey(idempotencyKey);
+    if (claim) {
+        return claim.replay;
+    }
+    try {
+        const result = await processRefund(paymentId, amountMinor, reason);
+        await finalizeIdempotencyKey(idempotencyKey, result);
+        return result;
+    } catch (err) {
+        await releaseIdempotencyKeyOnFailure(idempotencyKey);
+        throw err;
+    }
 }
 
 export const PaymentService = {
@@ -319,3 +420,4 @@ export const PaymentService = {
     refundPayment,
     processRefund,
 }
+

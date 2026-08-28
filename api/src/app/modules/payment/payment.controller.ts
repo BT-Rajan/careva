@@ -89,7 +89,9 @@ const webhook = (providerName: 'razorpay' | 'telr') => catchAsync(async (req: Re
 
 const refund = catchAsync(async (req: Request, res: Response) => {
     const { amountMinor, reason } = req.body;
-    const result = await PaymentService.refundPayment(req.user, req.params.paymentId, amountMinor, reason);
+    // Pass 20 — Concurrency & Idempotency: same header convention as booking (Pass 6).
+    const idempotencyKey = req.headers['idempotency-key'] as string | undefined;
+    const result = await PaymentService.refundPayment(req.user, req.params.paymentId, amountMinor, reason, idempotencyKey);
     sendResponse(res, {
         statusCode: 200,
         message: 'Refund processed !!',
