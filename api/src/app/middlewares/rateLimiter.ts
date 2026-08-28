@@ -58,3 +58,38 @@ export const paymentWebhookRateLimiter = rateLimit({
     legacyHeaders: false,
     message: { success: false, message: 'Too many webhook requests.' }
 });
+
+/**
+ * Pass 19 — Security Hardening. Appointment creation (both the authenticated and guest
+ * paths) is intentionally public with no auth (see Pass 15's note on
+ * POST /appointment/create — booking without an account is a deliberate product
+ * decision), which makes it the natural target for abuse this app had never actually
+ * rate-limited: spam bookings, resource exhaustion, or using the guest flow to trigger
+ * unlimited outbound notification emails (Pass 16) at someone else's address. Looser
+ * than login/reset (a real patient might legitimately book multiple appointments in a
+ * session — for different family members, say) but still bounded.
+ */
+export const appointmentCreateRateLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 20,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { success: false, message: 'Too many booking attempts. Please try again later.' }
+});
+
+/**
+ * Pass 19 — Security Hardening. POST /tracking is genuinely public by design (Pass 15
+ * made trackingId a real random, unguessable token specifically so this could stay
+ * that way) — but "unguessable" and "unlimited attempts" are different guarantees.
+ * Without this, nothing stops a script from submitting requests as fast as the network
+ * allows; a truly negligible chance per-guess still isn't zero at unlimited volume.
+ * Same window/limit as verifyEmailRateLimiter — both are "slow down brute-forcing an
+ * opaque token" limiters, not "protect a login form" limiters.
+ */
+export const trackAppointmentRateLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 20,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { success: false, message: 'Too many tracking attempts. Please try again later.' }
+});

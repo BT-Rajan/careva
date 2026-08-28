@@ -14,9 +14,21 @@ const Login = catchAsync(async (req: Request, res: Response) => {
     const result = await AuthService.loginUser(req.body);
     const { accessToken } = result;
 
+    // Pass 19 — Security Hardening. This cookie isn't actually read anywhere today —
+    // auth.ts's middleware only checks the Authorization header (see
+    // helpers/axios/axiosInstance.js, which attaches the token from localStorage) — but
+    // it's still a real Set-Cookie carrying a raw JWT into the browser, and hardening it
+    // costs nothing. `sameSite: 'lax'` is explicit here rather than left to each
+    // browser's own default (browsers do default un-annotated cookies to Lax today, but
+    // relying on an implicit default for a security property is fragile — it should be
+    // a decision this code visibly makes, not an accident of whichever browser a
+    // request happens to come from). Matched on clearCookie below — mismatched
+    // attributes between set and clear is a common reason a "logout" silently fails to
+    // actually remove the cookie.
     const cookieOptions = {
         secure: config.env === 'production',
-        httpOnly: true
+        httpOnly: true,
+        sameSite: 'lax' as const,
     }
     res.cookie('accessToken', accessToken, cookieOptions)
     sendResponse(res, {
@@ -116,9 +128,12 @@ const Logout = catchAsync(async (req: Request, res: Response) => {
     // endpoint to call on logout, but a token captured before logout remains valid until
     // it naturally expires. True server-side invalidation needs a stateful token/session
     // store, which is a stack decision this pass does not make unilaterally.
+    // Pass 19: sameSite must match what Login set above, or the browser treats it as a
+    // different cookie and clearCookie silently does nothing.
     const cookieOptions = {
         secure: config.env === 'production',
-        httpOnly: true
+        httpOnly: true,
+        sameSite: 'lax' as const,
     }
     res.clearCookie('accessToken', cookieOptions);
     sendResponse(res, {

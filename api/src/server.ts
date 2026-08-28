@@ -5,7 +5,24 @@ import prisma from './shared/prisma';
 
 let server: Server;
 
+// Pass 19 — Security Hardening. Fail fast on a missing/weak JWT secret, rather than
+// booting successfully and only discovering the problem the first time someone tries
+// to log in (a bare `jwt.sign(payload, undefined, ...)` throws immediately, but only
+// on that first request — a deployment could sit "up" and passing basic health checks
+// while every single auth-dependent request 500s). A short length check isn't a real
+// strength audit, but it catches the most likely accidents: an unset env var, or an
+// obviously-placeholder value like "secret" left over from local development.
+function assertSecureConfig() {
+    const secret = config.jwt.secret;
+    if (!secret || String(secret).length < 16) {
+        console.error('[startup] JWT_SCRET is missing or too short (must be at least 16 characters). Refusing to start.');
+        process.exit(1);
+    }
+}
+
 async function bootstrap() {
+    assertSecureConfig();
+
     server = app.listen(config.port, () => {
         console.log(`Server running on port ${config.port}`);
     });
