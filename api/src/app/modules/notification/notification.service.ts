@@ -108,6 +108,31 @@ const retryNotification = async (reqUser: any, id: string): Promise<Notification
     return prisma.notification.findUniqueOrThrow({ where: { id } });
 }
 
+// Pass 23 — Background Jobs. The automated counterpart to retryNotification above,
+// called from jobs/retryFailedNotifications.job.ts on a schedule rather than an admin
+// click. Caps retries at MAX_AUTO_RETRY_ATTEMPTS — a permanently-broken recipient
+// address (typo'd email, a mailbox that will never accept mail) must not be retried
+// forever; once a notification has failed that many times, it stays FAILED for an
+// admin to look at manually rather than the job silently hammering the same dead
+// address on every run indefinitely.
+const MAX_AUTO_RETRY_ATTEMPTS = 5;
+
+const retryFailedNotificationsBatch = async (): Promise<{ retried: number; nowSent: number }> => {
+    const candidates = await prisma.notification.findMany({
+        where: { status: 'FAILED', attempts: { lt: MAX_AUTO_RETRY_ATTEMPTS } },
+        take: 200,
+    });
+    let nowSent = 0;
+    for (const notification of candidates) {
+        await attemptSend(notification.id, notification.templatePath, notification.templateData, notification.recipientEmail, notification.subject);
+        const updated = await prisma.notification.findUnique({ where: { id: notification.id } });
+        if (updated?.status === 'SENT') {
+            nowSent++;
+        }
+    }
+    return { retried: candidates.length, nowSent };
+}
+
 const getNotifications = async (reqUser: any, filters: { status?: string, recipientId?: string }): Promise<Notification[]> => {
     if (reqUser?.role !== 'admin') {
         throw new ApiError(httpStatus.FORBIDDEN, 'Only an admin can view notifications !!');
@@ -136,6 +161,7 @@ const getNotificationById = async (reqUser: any, id: string): Promise<Notificati
 export const NotificationService = {
     dispatchNotification,
     retryNotification,
+    retryFailedNotificationsBatch,
     getNotifications,
     getNotificationById,
 }

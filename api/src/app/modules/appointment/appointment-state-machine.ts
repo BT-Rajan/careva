@@ -68,6 +68,28 @@ export interface TransitionCheckResult {
 }
 
 /**
+ * Pass 23 — Background Jobs. Shape-only check (no actor), for the one transition in
+ * this graph reserved for a system-triggered sweep rather than any human action — same
+ * split, and same reasoning, as invoice-lifecycle.ts's
+ * assertValidInvoiceTransitionShape: the caller itself (here, jobs/expireAppointments.job.ts)
+ * is the trust boundary, not a request actor, so there is nothing to check an
+ * "actorRole" against.
+ */
+export const assertValidAppointmentTransitionShape = (
+    currentStatus: AppointmentStatus,
+    requestedStatus: AppointmentStatus
+): TransitionCheckResult => {
+    const legalNextStates = TRANSITIONS[currentStatus] ?? [];
+    if (!legalNextStates.includes(requestedStatus)) {
+        throw new ApiError(
+            httpStatus.CONFLICT,
+            `Cannot move an appointment from ${currentStatus} to ${requestedStatus}. Valid next states: ${legalNextStates.join(', ') || '(none — this is a terminal state)'}.`
+        );
+    }
+    return { from: currentStatus, to: requestedStatus };
+}
+
+/**
  * Throws if the transition is illegal (wrong shape) or unauthorized (wrong actor).
  * Callers pass the CURRENT status read fresh from the database, never a client-supplied
  * "from" value — the current status is authoritative, not something the caller asserts.

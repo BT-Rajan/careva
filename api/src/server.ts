@@ -3,6 +3,7 @@ import app from "./app";
 import config from './config';
 import prisma from './shared/prisma';
 import { errorlogger } from './shared/logger';
+import { startBackgroundJobs } from './jobs';
 
 let server: Server;
 
@@ -27,6 +28,12 @@ async function bootstrap() {
     server = app.listen(config.port, () => {
         console.log(`Server running on port ${config.port}`);
     });
+
+    // Pass 23 — Background Jobs. Started once the HTTP server is listening — jobs
+    // don't need to block startup, and if this ever throws (it shouldn't; node-cron's
+    // own scheduling calls are synchronous), it shouldn't prevent the server from
+    // accepting requests.
+    startBackgroundJobs();
 
     // Pass 18 — Error Handling & Recovery. Every previous exit path here had the same
     // two bugs: it discarded the actual error (both uncaughtException and
