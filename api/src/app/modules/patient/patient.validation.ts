@@ -14,6 +14,14 @@ const CreatePatientValidation = z.object({
     }).passthrough(),
 });
 
+// Pass 24 — Data Privacy & Retention.
+const DeleteMyAccountValidation = z.object({
+    body: z.object({
+        password: z.string().min(1, 'Your current password is required to delete your account.'),
+    }),
+});
+
 export const PatientValidation = {
     CreatePatientValidation,
+    DeleteMyAccountValidation,
 };

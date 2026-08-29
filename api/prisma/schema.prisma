@@ -75,6 +75,14 @@ model Patient {
   /// Soft-delete scaffold (Pass 2). Not yet wired into service code — hard `delete()`
   /// calls remain until Pass 12 (Patient Data & Medical Records) owns the cutover.
   deletedAt    DateTime?
+  /// Pass 24 — Data Privacy & Retention. Distinguishes an admin deactivation
+  /// (`deletedAt` set, every PII field still intact, reversible via reactivatePatient)
+  /// from a patient's own "delete my account" request (`deletedAt` set AND this flag —
+  /// PII fields have been overwritten with anonymized placeholders, genuinely
+  /// irreversible). reactivatePatient refuses to run against a row with this set to
+  /// true: there is no real data left to restore, only anonymized placeholders, so
+  /// "reactivating" it would be misleading rather than actually undoing anything.
+  piiScrubbed  Boolean        @default(false)
   appointments Appointments[]
   Reviews      Reviews[]
   Prescription Prescription[]

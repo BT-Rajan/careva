@@ -21,8 +21,17 @@ export const patientApi = baseApi.injectEndpoints({
                 },
             }),
             invalidatesTags: [tagTypes.patient]
+        }),
+        // Pass 24 — Data Privacy & Retention.
+        deleteMyAccount: build.mutation({
+            query: (password) => ({
+                url: `${PAT_URL}/me`,
+                method: 'DELETE',
+                data: { password },
+            }),
+            invalidatesTags: [tagTypes.patient]
         })
     })
 })
 
-export const { useGetPatientQuery, useUpdatePatientMutation } = patientApi
+export const { useGetPatientQuery, useUpdatePatientMutation, useDeleteMyAccountMutation } = patientApi

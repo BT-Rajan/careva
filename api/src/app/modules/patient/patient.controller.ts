@@ -63,6 +63,15 @@ const updatePatient = catchAsync(async (req: Request, res: Response) => {
     })
 })
 
+const deleteMyAccount = catchAsync(async (req: Request, res: Response) => {
+    const result = await PatientService.deleteMyAccount(req.user, req.body?.password);
+    sendResponse(res, {
+        statusCode: 200,
+        message: result.message,
+        success: true,
+    })
+})
+
 export const PatientController = {
     createPatient,
     updatePatient,
@@ -70,4 +79,5 @@ export const PatientController = {
     getAllPatients,
     deletePatient,
     reactivatePatient,
+    deleteMyAccount,
 }
