@@ -1,6 +1,25 @@
-/node_modules
-/dist
-/build
-.env
-.env.local
+# Pass 26 — Production Readiness. `/dist` and `/build` here only ever matched a
+# `dist`/`build` folder at the repo ROOT — this project's own build script
+# (`npm run build` -> `tsc && copyfiles ...` in api/package.json) produces `api/dist`,
+# a nested path these root-anchored patterns never covered. 68 stale generated .js
+# files were found checked into git as a direct result while auditing this — removed
+# from tracking in the same commit as this fix. Changed to unanchored `dist/` so it
+# matches at any depth.
+node_modules/
+dist/
+build/
 .DS_Store
+
+# `.env` alone only protects a FUTURE `.env` (at any depth, unanchored patterns match
+# recursively) from ever being added — it does not cover `.env.production`,
+# `.env.test`, etc. Extended to `.env.*` with an explicit carve-out for the one
+# environment file that's supposed to be committed.
+.env
+.env.*
+!.env.example
+
+# Pass 22's winston logger and Pass 25's Jest coverage reports are both real,
+# generated-on-disk artifacts with no reason to ever be version controlled.
+logs/
+*.log
+coverage/

@@ -71,7 +71,7 @@ Open a **new** PowerShell window:
 
 ```powershell
 cd careva
-copy .env.example .env    REM if no .env.example exists at root, create .env manually
+copy .env.example .env
 notepad .env
 ```
 
@@ -148,6 +148,7 @@ npm run compile
 
 ```bash
 cd ~/careva
+cp .env.example .env
 nano .env
 ```
 
@@ -245,4 +246,7 @@ Use [NSSM](https://nssm.cc/) to wrap `node dist/server.js` (API) and `serve -s b
 - [ ] Upload a profile image and confirm it lands in Cloudinary
 - [ ] Create an admin row directly in the `Auth` table (`role = admin`) — admins are not created via the sign-up form (see `README.md`)
 - [ ] Confirm `REACT_APP_API_BASE_URL_LIVE` on the frontend matches wherever the API actually ends up running
+- [ ] Visit `<API_URL>/health` and confirm it returns `{"status":"ok"}` — this checks real database connectivity, not just that the Node process is running
+- [ ] Confirm `JWT_SCRET` and `JWT_REFRESH_SECRET` in `api/.env` are freshly generated, unique values — **never** the placeholders shown in `api/.env.example`, and never a value that has ever appeared in any committed file or shared example
+- [ ] Give the server a few minutes after startup and check its logs for `[jobs] Background jobs scheduled` — confirms the appointment/payment expiry and notification-retry cron jobs (see `docs/passes/23-background-jobs.md`) actually started
 - [ ] If deploying behind a domain, set up HTTPS (e.g. via [Let's Encrypt](https://letsencrypt.org/) + Nginx/Certbot on Linux, or IIS/Cloudflare on Windows)
