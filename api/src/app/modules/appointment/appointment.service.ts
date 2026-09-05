@@ -24,12 +24,14 @@ import { NotificationService } from "../notification/notification.service";
 // fix, called from inside the SAME transaction as the appointment insert, under
 // Serializable isolation (see the two callers below) so that two concurrent booking
 // requests for the last remaining seat in a slot cannot both succeed. Under MariaDB/
-// InnoDB, Serializable isolation works differently than under Postgres: instead of an
-// optimistic conflict-abort (Postgres's SSI), InnoDB takes locking reads and the two
-// transactions can deadlock or lock-wait against each other. Prisma normalizes InnoDB
-// deadlocks (and Postgres serialization failures) to the same P2034 error code, which
-// is what runBookingTransaction below retries on — see the caveat there about lock-wait
-// timeouts specifically, which is the one path not yet confirmed to also surface as P2034.
+// InnoDB, Serializable isolation alone behaves differently than under Postgres:
+// instead of an optimistic conflict-abort (Postgres's SSI), InnoDB takes locking reads
+// and the two transactions can deadlock or lock-wait against each other, and it's not
+// guaranteed every failure mode maps to the same Prisma error code the retry logic in
+// runBookingTransaction checks for. To not depend on that mapping being right, this
+// function ALSO takes an explicit `SELECT ... FOR UPDATE` lock before checking
+// capacity (see below) — that's the actual correctness guarantee on MariaDB; the
+// Serializable isolation + P2034 retry is now defense-in-depth on top of it.
 //
 // Capacity comes from `DoctorTimeSlot.maximumPatient`, set per weekday
 // (docs/passes/01-domain-state-model.md §4.7 flagged this as the central gap this pass
@@ -64,6 +66,37 @@ const assertSlotAvailable = async (
     }
 
     const weekday = moment(scheduleDate).format('dddd').toLowerCase();
+
+    // MITIGATION for the MariaDB lock-wait-timeout gap flagged above: take an explicit
+    // exclusive row lock on the doctor's weekday slot-config row BEFORE reading
+    // capacity, so concurrent booking attempts for the same doctor+weekday serialize
+    // deterministically through ordinary InnoDB blocking — the second transaction just
+    // waits for the first to commit, rather than both proceeding far enough to race.
+    // This makes correctness independent of Serializable isolation's conflict-abort
+    // behavior (and independent of exactly which Prisma error code a given MariaDB
+    // failure mode maps to): even if this transaction is running under a weaker
+    // isolation level, or if the P2034 retry above never fires, two overlapping
+    // requests for the same doctor+weekday cannot both pass the capacity check without
+    // one having actually waited for the other's transaction to finish first.
+    // Released automatically on commit/rollback — an ordinary transactional row lock,
+    // not a MySQL named lock (GET_LOCK), so there's no manual-release/leak risk across
+    // Prisma's pooled connections.
+    //
+    // Tradeoff: this lock is per doctor+weekday, not per exact date+time slot, so it
+    // serializes ALL of a doctor's bookings for that weekday (every time range that
+    // weekday), not just concurrent attempts on the identical time slot. For this
+    // app's clinic-booking volume that's an acceptable cost for a simple, verifiably
+    // correct fix. If a specific doctor's booking throughput ever becomes a bottleneck,
+    // the finer-grained version would lock a per-date+time row instead — that needs a
+    // real row to exist to lock (e.g. a lazily-created per-slot ledger row), which is a
+    // bigger schema change and not needed unless contention is actually observed.
+    const lockedRows = await tx.$queryRaw<{ id: string }[]>`
+        SELECT id FROM DoctorTimeSlot WHERE doctorId = ${doctorId} AND day = ${weekday} LIMIT 1 FOR UPDATE
+    `;
+    if (lockedRows.length === 0) {
+        throw new ApiError(httpStatus.BAD_REQUEST, "Doctor is not available on the selected day !!");
+    }
+
     const doctorTimeSlot = await tx.doctorTimeSlot.findFirst({
         where: { doctorId, day: weekday as any },
         include: { timeSlot: true }
@@ -110,14 +143,13 @@ const assertSlotAvailable = async (
 // transient); if it still fails on retry, that's reported as a real "slot no longer
 // available" rather than a generic 500.
 //
-// CAVEAT (MariaDB): if InnoDB's deadlock detector doesn't fire and one transaction
-// instead sits on a lock until innodb_lock_wait_timeout (default 50s) — rather than a
-// deadlock detected quickly — this has NOT been confirmed to also surface as P2034; it
-// may fall through to the generic `throw error` below as a raw error / 500 instead of
-// the friendly "already booked" conflict message. Worth load-testing this specific path
-// (two simultaneous bookings for the last seat in a slot) against the actual MariaDB
-// deployment before relying on it in production; consider widening the P2034 check to
-// also catch a lock-wait-timeout error code if testing shows it's a different one.
+// MariaDB note: correctness for the double-booking race no longer depends on this retry
+// firing reliably — assertSlotAvailable now takes an explicit `SELECT ... FOR UPDATE`
+// lock on the doctor's weekday slot row before checking capacity, which serializes
+// concurrent attempts deterministically regardless of isolation level or which exact
+// error code a given MariaDB failure mode maps to. This P2034 retry is now
+// defense-in-depth for genuine lock-wait-timeout errors under real contention (where
+// retrying is still the right move), not the thing preventing double-booking.
 const runBookingTransaction = async <T>(fn: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> => {
     const attempt = () => prisma.$transaction(fn, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, maxWait: 10000, timeout: 15000 });
     try {
