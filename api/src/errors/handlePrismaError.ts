@@ -3,7 +3,7 @@
  *
  * Replaces handleValidationError.ts and handleCastError.ts, which were dead on
  * arrival: both were entirely commented-out and written against `mongoose.Error.*`
- * types — this app has never used Mongoose (it's Prisma/Postgres throughout, see
+ * types — this app has never used Mongoose (it's Prisma/SQL throughout, see
  * shared/prisma.ts). They were boilerplate carried over from whatever starter template
  * this project began from and could never have applied to this codebase's actual
  * stack. Deleted rather than "fixed" — there was no working version of them to restore.

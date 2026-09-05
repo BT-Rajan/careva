@@ -23,8 +23,13 @@ import { NotificationService } from "../notification/notification.service";
 // appointments could pile up on the exact same doctor+date+time. This function is the
 // fix, called from inside the SAME transaction as the appointment insert, under
 // Serializable isolation (see the two callers below) so that two concurrent booking
-// requests for the last remaining seat in a slot cannot both succeed — Postgres will
-// abort one of them with a serialization failure, which the caller retries/reports.
+// requests for the last remaining seat in a slot cannot both succeed. Under MariaDB/
+// InnoDB, Serializable isolation works differently than under Postgres: instead of an
+// optimistic conflict-abort (Postgres's SSI), InnoDB takes locking reads and the two
+// transactions can deadlock or lock-wait against each other. Prisma normalizes InnoDB
+// deadlocks (and Postgres serialization failures) to the same P2034 error code, which
+// is what runBookingTransaction below retries on — see the caveat there about lock-wait
+// timeouts specifically, which is the one path not yet confirmed to also surface as P2034.
 //
 // Capacity comes from `DoctorTimeSlot.maximumPatient`, set per weekday
 // (docs/passes/01-domain-state-model.md §4.7 flagged this as the central gap this pass
@@ -98,11 +103,21 @@ const assertSlotAvailable = async (
     }
 }
 
-// Postgres error code 40001 ("serialization_failure") surfaces through Prisma as P2034.
-// This is the EXPECTED, correct outcome of two concurrent requests racing for the same
-// slot under Serializable isolation — not a bug. One retry is standard practice for
-// serializable transactions (most conflicts are transient); if it still fails on retry,
-// that's reported as a real "slot no longer available" rather than a generic 500.
+// Prisma normalizes both Postgres serialization failures (SQLSTATE 40001) and InnoDB
+// deadlocks (error 1213) to error code P2034. This is the EXPECTED, correct outcome of
+// two concurrent requests racing for the same slot under Serializable isolation — not a
+// bug. One retry is standard practice for serializable transactions (most conflicts are
+// transient); if it still fails on retry, that's reported as a real "slot no longer
+// available" rather than a generic 500.
+//
+// CAVEAT (MariaDB): if InnoDB's deadlock detector doesn't fire and one transaction
+// instead sits on a lock until innodb_lock_wait_timeout (default 50s) — rather than a
+// deadlock detected quickly — this has NOT been confirmed to also surface as P2034; it
+// may fall through to the generic `throw error` below as a raw error / 500 instead of
+// the friendly "already booked" conflict message. Worth load-testing this specific path
+// (two simultaneous bookings for the last seat in a slot) against the actual MariaDB
+// deployment before relying on it in production; consider widening the P2034 check to
+// also catch a lock-wait-timeout error code if testing shows it's a different one.
 const runBookingTransaction = async <T>(fn: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> => {
     const attempt = () => prisma.$transaction(fn, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, maxWait: 10000, timeout: 15000 });
     try {

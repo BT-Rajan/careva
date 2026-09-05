@@ -7,10 +7,10 @@ pass in this repository's CI/build environment.
 
 **Service-layer and route-level integration tests are not included here.** Every
 service function in this app (`*.service.ts`) is a thin-ish wrapper around Prisma calls
-against a real Postgres database — the actual sandbox this pass was built in has no
+against a real MariaDB database — the actual sandbox this pass was built in has no
 database reachable at all (confirmed repeatedly across many prior passes: `prisma
 generate`/`db push` cannot even reach `binaries.prisma.sh` to fetch engine binaries in
-this environment, let alone connect to a live Postgres instance). Writing integration
+this environment, let alone connect to a live database instance). Writing integration
 tests that would need a real database, in an environment that has never had one, would
 mean shipping test files that fail on every single run here — worse than not writing
 them, because a red test suite that's *expected* to be red teaches nobody anything and
@@ -18,11 +18,11 @@ erodes trust in the rest of the suite.
 
 ## What a real integration-test setup would look like
 
-If/when this project is run somewhere with a real (or containerized/test) Postgres
+If/when this project is run somewhere with a real (or containerized/test) MariaDB
 instance available:
 
 1. Add a `.env.test` pointing `DATABASE_URL` at a disposable test database (a local
-   Postgres, a Docker Compose service, or a CI-provisioned ephemeral instance).
+   MariaDB, a Docker Compose service, or a CI-provisioned ephemeral instance).
 2. `npx prisma migrate deploy` (or `db push`) against that test database before the
    suite runs — a `globalSetup`/`globalTeardown` in `jest.config.js` is the natural
    place to wire this, resetting/migrating the schema once per test run.

@@ -9,7 +9,7 @@ const tsJestTransformCfg = createDefaultPreset().transform;
  * own README for why: this app has no test database reachable from any environment
  * this test suite has been written/run in, so integration tests that would need one
  * are documented as a template, not written as runnable specs that would just fail on
- * every machine without a Postgres instance configured for testing.
+ * every machine without a MariaDB instance configured for testing.
  */
 /** @type {import("jest").Config} **/
 module.exports = {

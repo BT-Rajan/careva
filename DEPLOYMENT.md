@@ -3,7 +3,7 @@
 This guide covers deploying Careva **without Vercel and without Docker** — as a plain Node.js API plus a static/served React frontend, on either Windows or Linux. See `software_requirements.md` first for the full list of required software and accounts.
 
 Both Windows and Linux native deployment are covered below. Pick the section for your OS. Both assume you already have:
-- A PostgreSQL database and its connection string
+- A MariaDB database and its connection string
 - A Cloudinary account and API credentials
 - A Gmail account with an App Password
 
@@ -39,11 +39,11 @@ You'll be configuring two `.env` files:
 
 - Download from [git-scm.com](https://git-scm.com/download/win) and install with defaults.
 
-**3. Get a PostgreSQL database**
+**3. Get a MariaDB database**
 
 Either:
-- Install PostgreSQL locally: download from [postgresql.org/download/windows](https://www.postgresql.org/download/windows/), run the installer, remember the password you set for the `postgres` user.
-- Or use a managed/cloud Postgres provider and just grab the connection string — no local install needed.
+- Install MariaDB locally: download from [mariadb.org/download](https://mariadb.org/download/), run the installer, remember the password you set for the `root` user.
+- Or use a managed/cloud MySQL-compatible provider and just grab the connection string — no local install needed.
 
 **4. Configure and start the backend**
 
@@ -114,17 +114,23 @@ npm -v
 sudo apt-get install -y git
 ```
 
-**3. Get a PostgreSQL database**
+**3. Get a MariaDB database**
 
 Either install locally:
 
 ```bash
-sudo apt-get install -y postgresql postgresql-contrib
-sudo -u postgres createuser --interactive
-sudo -u postgres createdb careva
+sudo apt-get install -y mariadb-server
+sudo mariadb
+```
+```sql
+CREATE USER 'app_user'@'localhost' IDENTIFIED BY 'your-strong-password';
+CREATE DATABASE careva CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+GRANT ALL PRIVILEGES ON careva.* TO 'app_user'@'localhost';
+FLUSH PRIVILEGES;
+EXIT;
 ```
 
-Or use a managed/cloud Postgres provider and use the connection string it gives you.
+Or use a managed/cloud MySQL-compatible provider and use the connection string it gives you.
 
 **4. Configure and start the backend**
 

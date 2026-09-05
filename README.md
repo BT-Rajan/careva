@@ -42,7 +42,7 @@ You do **not** need to be a developer to **use** the live site. The instructions
 |-------|--------|
 | **Website (frontend)** | React, Redux Toolkit, Ant Design, React Router, Axios |
 | **API (backend)** | Node.js, Express, TypeScript |
-| **Database** | **PostgreSQL** (this project is set up to use **[Supabase](https://supabase.com/)** — hosted Postgres with a friendly dashboard) |
+| **Database** | **MariaDB** (MySQL-compatible, self-hosted) |
 | **ORM** | Prisma |
 
 ---
@@ -50,7 +50,7 @@ You do **not** need to be a developer to **use** the live site. The instructions
 ## Before you start (what to install)
 
 1. **[Node.js](https://nodejs.org/)** (LTS version is best) — includes `npm`.
-2. A **Supabase** account (free tier is fine) **or** any other PostgreSQL database.
+2. **[MariaDB](https://mariadb.org/download/)** (10.11+) or **[MySQL](https://dev.mysql.com/downloads/)** (8.0+), self-hosted or managed.
 3. Optional but recommended for full features: **Google** account (app password for mail), **Cloudinary** account (images).
 
 You do **not** have to install Prisma or TypeScript globally — the steps below use `npx`.
@@ -68,7 +68,7 @@ careva/                      ← React app (run from here with npm start)
 ├── .env                     ← Frontend: API URL (see below)
 ├── software_requirements.md ← Full list of required software & accounts
 ├── DEPLOYMENT.md            ← Step-by-step deploy guide (Windows & Linux)
-└── project_setup.txt        ← Short checklist (Supabase details are in this README)
+└── project_setup.txt        ← Short checklist
 ```
 
 ---
@@ -82,21 +82,31 @@ git clone https://github.com/BT-Rajan/careva.git
 cd careva
 ```
 
-### 2. Create the database on Supabase
+### 2. Create the database
 
-1. Go to [supabase.com](https://supabase.com/) and sign in.
-2. **New project** → choose organization, name, region, and a strong database password.
-3. Wait until the project is ready.
-4. Open **Project Settings** → **Database**.
-5. Under **Connection string**, choose **URI** (PostgreSQL).
-6. Copy the string. It looks like  
-   `postgresql://postgres.[ref]:[YOUR-PASSWORD]@aws-0-...pooler.supabase.com:6543/postgres`  
-   Replace `[YOUR-PASSWORD]` with the password you set for the project.
-7. For Prisma, use a connection string that works from your machine. Supabase often provides:
-   - **Session mode** (port `5432`) or **Transaction pooler** (port `6543`).  
-   If you see SSL errors, add **`?sslmode=require`** at the end of the URL (if not already there).
+If MariaDB isn't installed yet:
 
-> **Tip:** Keep this URL secret — it is the key to your database.
+```bash
+sudo apt-get install -y mariadb-server
+```
+
+Then create the database and a dedicated user:
+
+```bash
+sudo mariadb
+```
+```sql
+CREATE USER 'app_user'@'localhost' IDENTIFIED BY 'your-strong-password';
+CREATE DATABASE careva CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+GRANT ALL PRIVILEGES ON careva.* TO 'app_user'@'localhost';
+FLUSH PRIVILEGES;
+EXIT;
+```
+
+Your connection string will look like:
+`mysql://app_user:your-strong-password@localhost:3306/careva`
+
+> **Tip:** Keep this password secret, and URL-encode any special characters in it (e.g. `#` → `%23`) when placing it in `DATABASE_URL`.
 
 ### 3. Configure the backend (`api/.env`)
 
@@ -109,7 +119,7 @@ Edit **`api/.env`** and set at least:
 
 | Variable | What to put |
 |----------|-------------|
-| `DATABASE_URL` | Your Supabase PostgreSQL URI (from step 2). |
+| `DATABASE_URL` | Your MariaDB connection URI (from step 2). |
 | `PORT` | e.g. `5050` (default in many setups). |
 | `JWT_SCRET` / `JWT_EXPIRED_IN` | Strong secret and expiry (see `.env.example`). |
 | `BACKEND_LOCAL_URL` | Often `http://localhost:5050/api/v1/auth/` for local dev. |

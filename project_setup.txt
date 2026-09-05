@@ -14,17 +14,15 @@ cd api
 
 ### Setup Database
 1. Rename .env.example to .env (remove .example).
-2. Create a PostgreSQL Database (Railway if you don't have one installed locally):
-   - Create an account at https://railway.app/.
-   - Navigate to the New Section > Database > Add PostgreSQL.
-   - Select your created database and go to the Variables tab.
-   - Copy DATABASE_PUBLIC_URL.
-   - Paste the database URL into the .env file.
+2. Create a MariaDB Database (self-hosted, or any managed MySQL-compatible provider):
+   - Local: `sudo mariadb` then `CREATE DATABASE careva CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;` and create a user with privileges on it.
+   - Paste the resulting connection string into .env as DATABASE_URL, in the form
+     mysql://user:password@host:3306/careva
 
 ### Install Prisma
 - npm install -g prisma
 - npx prisma generate
-- npx prisma migrate dev
+- npx prisma db push
 
 ### Setup Google App Password (For Email Notification)
 1. Go to Google Account settings at https://myaccount.google.com/security?hl=en.

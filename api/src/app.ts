@@ -84,7 +84,7 @@ app.get('/', (req: Request, res: Response) => {
 // under /api/v1 — an orchestrator's health check (Docker, Kubernetes, a load balancer)
 // shouldn't need to know this API's versioning scheme just to ask "are you up." Checks
 // real database connectivity (a lightweight query), not just "the Node process is
-// running" — a process that's up but can't reach Postgres should NOT be reported
+// running" — a process that's up but can't reach the database should NOT be reported
 // healthy, since it can't actually serve any real request. Pass 18 already classifies
 // a Prisma connection failure as 503 in the global error handler; this does the
 // equivalent check proactively rather than waiting for a real request to reveal it.

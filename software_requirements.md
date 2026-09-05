@@ -2,7 +2,7 @@
 
 This document lists everything needed to **run, build, and deploy** Careva (frontend + API) on a local machine or a server. It does not cover *how* to deploy — see `DEPLOYMENT.md` for step-by-step instructions on Windows and Linux.
 
-Careva no longer targets Vercel or Docker. Deployment is native Node.js on the host machine — any machine or VM that can run Node.js and PostgreSQL works (bare metal, a VPS, or a plain server).
+Careva no longer targets Vercel or Docker. Deployment is native Node.js on the host machine — any machine or VM that can run Node.js and MariaDB/MySQL works (bare metal, a VPS, or a plain server).
 
 ---
 
@@ -12,7 +12,7 @@ Careva no longer targets Vercel or Docker. Deployment is native Node.js on the h
 |------|-----------|----------|
 | **Frontend** | React 18 single-page app (Create React App) | repo root |
 | **Backend / API** | Node.js + Express + TypeScript REST API | `api/` |
-| **Database** | PostgreSQL, accessed via Prisma ORM | external (self-hosted or managed) |
+| **Database** | MariaDB (MySQL-compatible), accessed via Prisma ORM | external (self-hosted or managed) |
 | **File storage** | Cloudinary (profile photos, uploaded content) | external service |
 | **Email** | Gmail SMTP via an App Password (password resets, verification, notifications) | external service |
 | **Payments** | Razorpay (India / INR) and Telr (Kuwait / KWD) — selected per-doctor via `Doctor.currency` | external services |
@@ -27,7 +27,7 @@ Careva no longer targets Vercel or Docker. Deployment is native Node.js on the h
 | **npm** | 10.x+ (bundled with Node 20) | Used for the frontend. The API can use either `npm` or `yarn` (a `yarn.lock` is present). |
 | **Yarn** (optional) | 1.22.x (Classic) | Only needed if you prefer Yarn over npm; both lockfiles exist. |
 | **Git** | 2.x+ | To clone and manage the repository. |
-| **PostgreSQL** | 14+ (Prisma supports 13–17) | Can be local, a VM-hosted instance, or a managed provider (Railway, Neon, RDS, self-hosted, etc.) |
+| **MariaDB** | 10.11+ (or MySQL 8.0+) | Can be local, a VM-hosted instance, or a managed provider (self-hosted, RDS, PlanetScale, etc.) |
 | **Prisma CLI** | Installed automatically via `npx prisma` — no separate global install required | Used for schema push/migrations and client generation. |
 
 ---
@@ -38,7 +38,7 @@ These are **not software installs**, but the app will not function fully without
 
 | Service | Purpose | Required for |
 |---------|---------|--------------|
-| **PostgreSQL database** | Primary data store | Both frontend (indirectly) and API (directly) |
+| **MariaDB database** | Primary data store | Both frontend (indirectly) and API (directly) |
 | **Cloudinary account** | Image upload/hosting (doctor photos, profile pictures, blog images) | API |
 | **Gmail account + App Password** | Sends transactional emails (verification, password reset, appointment notifications) | API |
 | **Razorpay account** (test or live) | Payment processing for India-based doctors (INR) | API |
@@ -54,7 +54,7 @@ If you skip Cloudinary/Gmail setup, the app will still run, but image uploads an
 |---------|--------------|-------------------|
 | Frontend (dev server) | `3000` | CRA default; not typically changed |
 | API | `5050` | `PORT` in `api/.env` |
-| PostgreSQL | `5432` | Set by your database provider/install |
+| MariaDB | `3306` | Set by your database provider/install |
 
 ---
 
@@ -71,7 +71,7 @@ If you skip Cloudinary/Gmail setup, the app will still run, but image uploads an
 
 | Variable | Description |
 |----------|-------------|
-| `DATABASE_URL` | PostgreSQL connection string |
+| `DATABASE_URL` | MariaDB (MySQL-format) connection string |
 | `PORT` | Port the API listens on (default `5050`) |
 | `NODE_ENV` | `development` or `production` |
 | `SHOW_ERROR_DETAILS` | `true`/`false` — show full error traces in responses |
@@ -104,7 +104,7 @@ Standard Create React App defaults — evergreen Chrome, Firefox, Edge, Safari. 
 Before deploying, make sure you have:
 
 - [ ] Node.js 20+ installed
-- [ ] A PostgreSQL database (connection string ready)
+- [ ] A MariaDB database (connection string ready)
 - [ ] A Cloudinary account and API credentials
 - [ ] A Gmail account with an App Password generated
 - [ ] A Razorpay account (India/INR bookings)

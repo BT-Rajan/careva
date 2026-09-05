@@ -273,7 +273,7 @@ const handleWebhook = async (providerName: 'razorpay' | 'telr', rawBody: string,
 //
 // The claim step (bare `create`, not check-then-create) is what actually closes the
 // race: two requests with the SAME key racing to create the same row can only have one
-// winner — Postgres's own unique constraint decides that, not application logic that
+// winner — the database's own unique constraint decides that, not application logic that
 // could have its own gap. The loser either replays a completed sibling's response, or
 // — if it got there before the winner finished — is told plainly that a duplicate
 // request is already in flight, rather than being allowed to also call the gateway.
