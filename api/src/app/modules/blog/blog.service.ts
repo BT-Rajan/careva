@@ -45,8 +45,7 @@ const getAllBlogs = async (filters: IBlogFilters, options: IOption): Promise<IGe
         andConditions.push({
             OR: blogSearchablFields.map((field) => ({
                 [field]: {
-                    contains: searchTerm,
-                    mode: 'insensitive'
+                    contains: searchTerm
                 }
             }))
         })

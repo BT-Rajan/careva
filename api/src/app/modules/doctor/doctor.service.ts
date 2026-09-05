@@ -103,8 +103,7 @@ const getAllDoctors = async (filters: IDoctorFilters, options: IOption, includeA
         andCondition.push({
             OR: DoctorSearchableFields.map((field) => ({
                 [field]: {
-                    contains: searchTerm,
-                    mode: 'insensitive'
+                    contains: searchTerm
                 }
             }))
         })
