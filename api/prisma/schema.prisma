@@ -212,6 +212,10 @@ model Appointments {
   payment      Payment[]
   // Pass 14 — Invoice & Financial Records.
   invoices     Invoice[]
+  // Pass 21 — Admin & Operational Controls. Opposite side of Reviews.appointment
+  // (optional there — guest/legacy reviews may have no linked visit; see that field's
+  // comment). Required by Prisma even though nothing currently reads this list.
+  reviews      Reviews[]
 
   // Availability/lookup queries filter by doctor + date very frequently (booking flow,
   // doctor dashboard, admin dashboard) — this was previously an unindexed table scan.

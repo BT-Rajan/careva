@@ -72,7 +72,6 @@ const Treatment = () => {
         }
         if (isSuccess) {
             message.success('Successfully Changed Saved !');
-            setSelectAppointmentStatus("");
             setPatientStatus("");
             setDaignosis([]);
             setDisease([]);
