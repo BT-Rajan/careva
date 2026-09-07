@@ -16,6 +16,7 @@ import { useDispatch } from 'react-redux';
 import { addInvoice } from '../../../redux/feature/invoiceSlice';
 import Header from '../../Shared/Header/Header';
 import useAuthCheck from '../../../redux/hooks/useAuthCheck';
+import { visitReasonOptions } from '../../../constant/global';
 
 const DoctorBooking = () => {
     const dispatch = useDispatch();
@@ -159,6 +160,19 @@ const DoctorBooking = () => {
             scheduleTime: selectTime,
             doctorId: doctorId,
             patientId: role !== '' && role === 'patient' ? patientId : undefined,
+            // BUG FIX: this flow never sent reasonForVisit at all (the field is optional
+            // server-side, so bookings didn't fail — they just reached the doctor with no
+            // stated reason). The shared PersonalInformation form's freetext AND its
+            // "Type of visit" dropdown (selectValue.problemType) were both being captured
+            // in local state and then dropped at submit time. Now folds both in, matching
+            // AppointmentPage.jsx's existing composition, so both booking flows submit
+            // this consistently.
+            reasonForVisit: [
+                selectValue.problemType && visitReasonOptions.find((o) => o.value === selectValue.problemType)?.label,
+                selectValue.reasonForVisit,
+            ]
+                .filter(Boolean)
+                .join(' — ') || selectValue.reasonForVisit,
         }
         obj.payment = {
             paymentType: selectValue.paymentType,

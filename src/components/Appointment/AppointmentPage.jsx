@@ -178,7 +178,7 @@ const AppointmentPage = () => {
           selectValue={selectValue}
           isCheck={isCheck}
           setIsChecked={setIsChecked}
-          data={selectedDoctor ? { ...selectedDoctor, price: 60 } : false}
+          data={selectedDoctor ? { ...selectedDoctor, price: selectedDoctor.price ?? 60 } : false}
           selectedDate={selectedDate}
           selectTime={selectTime}
         />
