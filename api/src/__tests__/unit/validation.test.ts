@@ -10,7 +10,7 @@ const validPatientInfo = {
     firstName: 'Jane',
     lastName: 'Doe',
     email: 'jane@example.com',
-    phone: '555-0100',
+    phone: '+965 5555 0100',
     scheduleDate: '2026-09-01',
     scheduleTime: '10:00 am',
     doctorId: 'doctor-uuid',

@@ -3,6 +3,7 @@ import prisma from "../../../shared/prisma";
 import ApiError from "../../../errors/apiError";
 import httpStatus from "http-status";
 import moment from 'moment';
+import { dateOnly, weekdayOf } from "../../../shared/kuwaitTime";
 import * as path from 'path';
 import config from "../../../config";
 import { toMinorUnits } from "../../../shared/money";
@@ -57,7 +58,7 @@ const assertSlotAvailable = async (
     // day, and DoctorBlockedDate.date is always stored normalized (see
     // doctorTimeSlot.service.ts's createBlockedDate) — exact-string matching the raw
     // scheduleDate against it would silently never match.
-    const normalizedDate = moment(scheduleDate).format('YYYY-MM-DD');
+    const normalizedDate = dateOnly(scheduleDate);
     const blockedDate = await tx.doctorBlockedDate.findUnique({
         where: { doctorId_date: { doctorId, date: normalizedDate } }
     });
@@ -65,7 +66,14 @@ const assertSlotAvailable = async (
         throw new ApiError(httpStatus.CONFLICT, "The doctor is unavailable on the selected date !!");
     }
 
-    const weekday = moment(scheduleDate).format('dddd').toLowerCase();
+    // Adversarial stress-test finding (post Pass 26): this used to be
+    // `moment(scheduleDate).format('dddd').toLowerCase()`. moment parses a bare
+    // "YYYY-MM-DD" string as UTC midnight but *formats* it in the server's local zone —
+    // on a server whose system timezone sits west of UTC, that silently rolls the date
+    // back by a day, which here would match the capacity lock (and the doctor's
+    // configured hours) against the WRONG weekday. `weekdayOf` avoids the conversion
+    // entirely — see shared/kuwaitTime.ts.
+    const weekday = weekdayOf(scheduleDate);
 
     // MITIGATION for the MariaDB lock-wait-timeout gap flagged above: take an explicit
     // exclusive row lock on the doctor's weekday slot-config row BEFORE reading
@@ -265,6 +273,15 @@ const buildAppointmentCore = async (
     }
 
     const requestedDoctorId = patientInfo.doctorId || config.defaultAdminDoctor;
+    if (!requestedDoctorId) {
+        // Adversarial stress-test finding (post Pass 26): previously, an unset
+        // config.defaultAdminDoctor meant this silently became `undefined`, which
+        // reached `tx.doctor.findUnique({ where: { id: undefined } })` below as a
+        // Prisma validation exception (an opaque 500) instead of the clean, actionable
+        // error this guard now gives — for what is otherwise an entirely valid guest
+        // request (no doctorId is allowed by design; see appointment.validation.ts).
+        throw new ApiError(httpStatus.BAD_REQUEST, 'Please select a doctor to book with.');
+    }
     patientInfo['doctorId'] = requestedDoctorId;
 
     const result = await runBookingTransaction(async (tx) => {

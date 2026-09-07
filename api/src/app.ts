@@ -4,6 +4,7 @@ import helmet from 'helmet';
 import CookieParser from 'cookie-parser';
 import httpStatus from 'http-status';
 import { ZodError } from 'zod';
+import { MulterError } from 'multer';
 import { Prisma } from '@prisma/client';
 import ApiError from './errors/apiError';
 import handleZodError from './errors/handleZodError';
@@ -140,6 +141,17 @@ app.use((err: unknown, req: Request, res: Response, next: NextFunction) => {
     // fallback below and was indistinguishable from an actual server bug, both to
     // whoever's reading logs and to any client trying to decide whether retrying is
     // worthwhile.
+    // Adversarial stress-test finding (post Pass 26), companion to the multer `limits`/
+    // `fileFilter` added in uploadHelper.ts: without this branch, a too-large or
+    // wrong-type upload throws a MulterError with a `code` like 'LIMIT_FILE_SIZE' but no
+    // `statusCode`, so it fell through to the generic 500 fallback below — an honest
+    // client mistake reported as a server bug.
+    if (err instanceof MulterError) {
+        const message = err.code === 'LIMIT_FILE_SIZE'
+            ? 'File is too large. Maximum upload size is 8MB.'
+            : err.message;
+        return res.status(httpStatus.BAD_REQUEST).json({ success: false, message });
+    }
     if (err instanceof Prisma.PrismaClientInitializationError) {
         return res.status(httpStatus.SERVICE_UNAVAILABLE).json({
             success: false,
