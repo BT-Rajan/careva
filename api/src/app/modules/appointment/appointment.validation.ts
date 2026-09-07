@@ -18,11 +18,23 @@
  */
 import { z } from 'zod';
 
+// Adversarial stress-test finding (post Pass 26): `phone` previously only checked
+// non-empty — any string of any shape was accepted on this app's highest-traffic write
+// path. Kuwait numbers are 8 digits, optionally prefixed with `+965`/`965`, and start
+// with 2 (landline), or 5/6/9 (mobile) — this validates that shape after stripping
+// spaces/dashes, so "+965 5555 5555", "965-5555-5555", and "55555555" all pass, but
+// garbage input that would otherwise silently break appointment-confirmation contact
+// (this app's only reminder channel today — see the top-10 review) does not.
+const KUWAIT_PHONE_REGEX = /^(?:\+?965)?[2569]\d{7}$/;
+
 const patientInfoCore = {
     firstName: z.string().trim().min(1, 'First name is required'),
     lastName: z.string().trim().min(1, 'Last name is required'),
     email: z.string().trim().email('A valid email is required'),
-    phone: z.string().trim().min(1, 'Phone is required'),
+    phone: z.string().trim().min(1, 'Phone is required').refine(
+        (val) => KUWAIT_PHONE_REGEX.test(val.replace(/[\s-]/g, '')),
+        { message: 'Enter a valid Kuwait phone number, e.g. +965 5555 5555' }
+    ),
     scheduleDate: z.string().trim().min(1, 'Schedule date is required'),
     scheduleTime: z.string().trim().min(1, 'Schedule time is required'),
     patientId: z.string().optional(),

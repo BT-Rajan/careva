@@ -11,7 +11,31 @@ cloudinary.config({
     api_secret: config.cloudinary.secret
 });
 
-const upload = multer({storage: multer.memoryStorage()});
+// Adversarial stress-test finding (post Pass 26). `multer.memoryStorage()` buffers the
+// entire file in process memory before Cloudinary ever sees it. With no `limits` and no
+// `fileFilter`, every one of this app's four upload endpoints (doctor/patient profile
+// photo, blog cover, blog inline image) accepted a file of any size and any type:
+// - Unbounded size = an unauthenticated-adjacent memory-exhaustion DoS — a handful of
+//   concurrent large-file POSTs can push the Node process to its memory limit and crash
+//   it, taking every other request down with it.
+// - No mimetype check + `resource_type: 'auto'` on the Cloudinary side below = an
+//   attacker (or just a confused patient) can upload an arbitrary file — video, archive,
+//   executable — through what the UI presents as an "image" field.
+// 8MB is a generous ceiling for a profile photo or blog cover; raise it if a real usage
+// pattern needs more, but it should never be unbounded.
+const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
+const ALLOWED_IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
+
+const upload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: MAX_UPLOAD_BYTES },
+    fileFilter: (_req, file, cb) => {
+        if (!ALLOWED_IMAGE_MIME_TYPES.has(file.mimetype)) {
+            return cb(new ApiError(httpStatus.BAD_REQUEST, 'Only JPEG, PNG, WEBP, or GIF images are allowed.'));
+        }
+        cb(null, true);
+    },
+});
 
 // Pass 18 — Error Handling & Recovery. Previously threw a plain `Error` for the
 // no-file case, and let a Cloudinary failure (network error, invalid credentials,
@@ -27,7 +51,7 @@ const uploadFile = async (file: any): Promise<ICloudinaryResponse> => {
     }
     return new Promise((resolve, reject) => {
         cloudinary.uploader.upload_stream(
-            { resource_type: 'auto', folder: 'careva' },
+            { resource_type: 'image', folder: 'careva' },
             (error: any, result: any) => {
                 if (error) {
                     console.error('Cloudinary upload failed:', error);

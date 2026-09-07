@@ -3,6 +3,7 @@ import ApiError from "../../../errors/apiError";
 import prisma from "../../../shared/prisma";
 import { DoctorTimeSlot, ScheduleDay } from "@prisma/client";
 import moment from "moment";
+import { dateOnly, todayInKuwait, weekdayOf } from "../../../shared/kuwaitTime";
 
 // Pass 11 — Doctor Schedule Engine.
 const TIME_FORMATS = ['hh:mm a', 'HH:mm'];
@@ -59,11 +60,19 @@ const getFutureActiveAppointmentsForWeekday = async (doctorId: string, day: stri
         },
         select: { id: true, scheduleDate: true, scheduleTime: true }
     });
-    const today = moment().startOf('day');
+    // Adversarial stress-test finding (post Pass 26): `moment().startOf('day')` is the
+    // server process's local midnight, not Kuwait's — on a server whose system
+    // timezone isn't Asia/Kuwait (very often UTC by default), this is off by up to
+    // three hours around each Kuwait midnight, which could let a just-passed
+    // appointment still count as "future" (or the reverse). `weekdayOf` replaces the
+    // old `moment(a.scheduleDate).format('dddd')`, which had the same UTC-parsed/
+    // local-formatted mismatch risk this function's sibling in appointment.service.ts
+    // had. See shared/kuwaitTime.ts.
+    const today = todayInKuwait();
     return appointments.filter((a) => {
         if (!a.scheduleDate) return false;
-        const d = moment(a.scheduleDate);
-        return d.isValid() && !d.isBefore(today) && d.format('dddd').toLowerCase() === day.toLowerCase();
+        const d = dateOnly(a.scheduleDate);
+        return moment(d, 'YYYY-MM-DD', true).isValid() && d >= today && weekdayOf(d) === day.toLowerCase();
     });
 }
 
