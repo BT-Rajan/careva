@@ -216,79 +216,101 @@ const recordIdempotentResponse = async (tx: Prisma.TransactionClient, idempotenc
     });
 }
 
-const createAppointment = async (payload: any, idempotencyKey?: string): Promise<Appointments | null | any> => {
-
+// Pass (merge): createAppointment (authenticated) and createAppointmentByUnAuthenticateUser
+// (guest) used to be two independently-maintained ~150-line functions, ~85% identical —
+// same slot check, same fee math, same idempotency handling, same payment-record shape.
+// Every fix so far had to be applied twice (see the git history before this change: five
+// separate comments reading "same fix as the authenticated path"). Unified into one
+// implementation, parameterized by `isAuthenticated`, with the two exported names kept as
+// thin wrappers so the controller/routes/validation layers needed zero changes.
+//
+// Three real behavior differences were found while merging, not just textual duplication
+// — each resolved deliberately rather than arbitrarily picking one side:
+//
+// 1. Doctor validation timing: the authenticated path validated the doctor OUTSIDE the
+//    transaction, before it started — a small TOCTOU gap where a doctor could be
+//    deactivated between that check and the booking actually committing. The guest path
+//    already validated inside the transaction. Unified on "inside" for both.
+//
+// 2. Fee fallback when Doctor.price is unset: authenticated used '0', guest used '60'.
+//    The frontend's own checkout preview (CheckoutPage.jsx: `data?.price ?? 60`) already
+//    assumes 60, so '0' was the actual bug — the same doctor could be charged
+//    differently depending on which endpoint booked them. Unified on 60. In practice an
+//    APPROVED (bookable) doctor is expected to always have a price set — see
+//    doctor-lifecycle.ts, which treats it as a required profile-completion field — so
+//    this fallback is a safety net, not something that should fire in the common case.
+//
+// 3. Doctor notification: the authenticated path emailed both patient and doctor on a
+//    new booking; the guest path only emailed the guest — a doctor had no way to know a
+//    guest had booked them short of checking the dashboard. Doctor notification now
+//    fires for both paths whenever the doctor has an email on file.
+//
+// Also fixed in passing (found while rewriting this exact line, not a separate pass):
+// the authenticated confirmation subject line had a template-literal/concatenation typo
+// — `${appointment.scheduleDate} + ' ' + ${appointment.scheduleTime}` — which put the
+// literal text " + ' ' + " into every confirmation email subject instead of a space.
+const buildAppointmentCore = async (
+    payload: any,
+    idempotencyKey: string | undefined,
+    isAuthenticated: boolean
+): Promise<any> => {
     const { patientInfo, payment } = payload;
-    if(patientInfo.patientId){
+    if (patientInfo.patientId) {
         const isUserExist = await prisma.patient.findUnique({
-            where: {
-                id: patientInfo.patientId
-            }
-        })
+            where: { id: patientInfo.patientId }
+        });
         if (!isUserExist) {
-            patientInfo['patientId'] = null
+            patientInfo['patientId'] = null;
         }
     }
 
-    const isDoctorExist = await prisma.doctor.findUnique({
-        where: {
-            id: patientInfo.doctorId
-        }
-    });
+    const requestedDoctorId = patientInfo.doctorId || config.defaultAdminDoctor;
+    patientInfo['doctorId'] = requestedDoctorId;
 
-    if (!isDoctorExist) {
-        throw new ApiError(httpStatus.NOT_FOUND, 'Doctor Account is not found !!')
-    }
-    // Pass 10 — Doctor Lifecycle: previously NOTHING checked approval status before
-    // allowing a booking — an admin-never-reviewed, or explicitly rejected/suspended,
-    // doctor was fully bookable. This is Pass 1's invariant #6 ("a doctor must be
-    // Approved/Active to be bookable"), finally enforced.
-    if (isDoctorExist.approvalStatus !== 'APPROVED') {
-        throw new ApiError(httpStatus.CONFLICT, 'This doctor is not currently accepting bookings !!');
-    }
-    // Pass 7 — Payment System: previously set to 'paid' unconditionally right here, before
-    // any gateway was ever involved (Gap G6, docs/passes/01-domain-state-model.md). Now
-    // left at its schema default ('unpaid') and only flipped to 'paid' by
-    // payment.service.ts's verifyAndFinalizePayment, once a real gateway has confirmed
-    // the payment — see PaymentService.createProviderOrderForPayment below.
-  
     const result = await runBookingTransaction(async (tx) => {
         // Pass 6: if this exact booking attempt already succeeded (same Idempotency-Key),
         // replay the original result instead of creating a second appointment.
         const replay = await getIdempotentReplay(tx, idempotencyKey);
         if (replay) return replay;
 
-        // Pass 5: the single most important check in the whole booking flow — must run
-        // first, inside the same transaction as the insert. See assertSlotAvailable above.
-        await assertSlotAvailable(tx, patientInfo.doctorId, patientInfo.scheduleDate, patientInfo.scheduleTime);
+        const doctor = await tx.doctor.findUnique({ where: { id: requestedDoctorId } });
+        if (!doctor) {
+            throw new ApiError(httpStatus.NOT_FOUND, 'Doctor Account is not found !!');
+        }
+        // Pass 10 — Doctor Lifecycle: a doctor must be Approved/Active to be bookable
+        // (Pass 1's invariant #6), enforced for both authenticated and guest bookings.
+        if (doctor.approvalStatus !== 'APPROVED') {
+            throw new ApiError(httpStatus.CONFLICT, 'This doctor is not currently accepting bookings !!');
+        }
 
-        // Pass 15 — Tracking & Public Access. Was a name-prefix + date + 3-digit-counter
-        // format, guessable/enumerable rather than a real credential — see
-        // shared/trackingId.ts for why that mattered (this value is the sole credential
-        // for a public, unauthenticated lookup that returns real PII/PHI). No longer
-        // needs to look at the previous row at all — a random token doesn't need a
-        // sequential counter to avoid collisions within the same day.
+        // Pass 15 — Tracking & Public Access: a random token, not a guessable
+        // name+date+counter — see shared/trackingId.ts. This is the sole credential for
+        // public, unauthenticated lookup of real PII/PHI, for both booking paths.
         patientInfo['trackingId'] = generateTrackingId();
+
+        // Pass 5 — the single most important check in the whole booking flow — must run
+        // inside the same transaction as the insert below. See assertSlotAvailable above,
+        // including the MariaDB row-lock mitigation for the simultaneous-booking race.
+        await assertSlotAvailable(tx, requestedDoctorId, patientInfo.scheduleDate, patientInfo.scheduleTime);
 
         const appointment = await tx.appointments.create({
             data: patientInfo,
-            include: {
-                doctor: true,
-                patient: true
-            }
+            include: { doctor: true, patient: true }
         });
+
         const { paymentMethod, paymentType } = payment;
-        const currency = isDoctorExist.currency;
-        // Pass 7: amounts are now stored in minor units (paise/fils) — see
-        // api/src/shared/money.ts. Doctor.price is still a human decimal string
-        // ("60.50"), converted here at the point of charge.
-        const docFeeMinor = toMinorUnits(isDoctorExist.price ?? '0', currency);
+        const currency = doctor.currency;
+        // Pass 7: amounts are stored in minor units (paise/fils) — see
+        // api/src/shared/money.ts. See the fee-fallback note above for why this is 60,
+        // not 0.
+        const docFeeMinor = toMinorUnits(doctor.price ?? '60', currency);
         const bookingFeeMinor = toMinorUnits(10, currency);
         const vatMinor = Math.round(0.15 * (docFeeMinor + bookingFeeMinor));
         // BUG FIX (Pass 7): totalAmount previously omitted bookingFee entirely
         // (`vat + docFee`, no bookingFee) — a patient was charged less than the sum of
         // the line items shown. Now the true sum of all three.
         const totalAmountMinor = docFeeMinor + bookingFeeMinor + vatMinor;
+
         let createdPayment: Payment | null = null;
         if (appointment.id) {
             createdPayment = await tx.payment.create({
@@ -304,40 +326,52 @@ const createAppointment = async (payload: any, idempotencyKey?: string): Promise
                     provider: getProviderForCurrency(currency).name,
                     currency: currency,
                 }
-            })
+            });
         }
-        const pathName = path.join(__dirname, '../../../../template/appointment.html')
-        const appointmentObj = {
+
+        // Guest bookings get a shorter confirmation email — no patient-portal-specific
+        // fields to show. Authenticated bookings get the richer template with doctor and
+        // patient details. Different content by design; same mechanism either way.
+        const pathName = path.join(
+            __dirname,
+            isAuthenticated ? '../../../../template/appointment.html' : '../../../../template/meeting.html'
+        );
+        const appointmentObj: any = {
             created: moment(appointment.createdAt).format('LL'),
             trackingId: appointment.trackingId,
             patientType: appointment.patientType,
             status: appointment.status,
             paymentStatus: appointment.paymentStatus,
             prescriptionStatus: appointment.prescriptionStatus,
-            scheduleDate:moment(appointment.scheduleDate).format('LL'),
-            scheduleTime:appointment.scheduleTime,
-            doctorImg: appointment?.doctor?.img,
-            doctorFirstName: appointment?.doctor?.firstName,
-            doctorLastName: appointment?.doctor?.lastName,
-            specialization:appointment?.doctor?.specialization,
-            designation:appointment?.doctor?.designation,
-            college:appointment?.doctor?.college,
-            patientImg:appointment?.patient?.img,
-            patientfirstName:appointment?.patient?.firstName,
-            patientLastName:appointment?.patient?.lastName,
-            dateOfBirth: moment().diff(moment(appointment?.patient?.dateOfBirth), 'years'),
-            bloodGroup:appointment?.patient?.bloodGroup,
-            city:appointment?.patient?.city,
-            state:appointment?.patient?.state,
-            country:appointment?.patient?.country
+            scheduleDate: moment(appointment.scheduleDate).format('LL'),
+            scheduleTime: appointment.scheduleTime,
+        };
+        if (isAuthenticated) {
+            Object.assign(appointmentObj, {
+                doctorImg: appointment?.doctor?.img,
+                doctorFirstName: appointment?.doctor?.firstName,
+                doctorLastName: appointment?.doctor?.lastName,
+                specialization: appointment?.doctor?.specialization,
+                designation: appointment?.doctor?.designation,
+                college: appointment?.doctor?.college,
+                patientImg: appointment?.patient?.img,
+                patientfirstName: appointment?.patient?.firstName,
+                patientLastName: appointment?.patient?.lastName,
+                dateOfBirth: moment().diff(moment(appointment?.patient?.dateOfBirth), 'years'),
+                bloodGroup: appointment?.patient?.bloodGroup,
+                city: appointment?.patient?.city,
+                state: appointment?.patient?.state,
+                country: appointment?.patient?.country,
+            });
         }
-        const replacementObj = appointmentObj;
-        const subject = `Appointment Confirm With Dr ${appointment?.doctor?.firstName + ' ' + appointment?.doctor?.lastName} at ${appointment.scheduleDate} + ' ' + ${appointment.scheduleTime}`
-        // Pass 16: previously a single EmailtTransporter call with `toMail` as a
+        const doctorFullName = `${appointment?.doctor?.firstName ?? ''} ${appointment?.doctor?.lastName ?? ''}`.trim();
+        const subject = isAuthenticated
+            ? `Appointment Confirm With Dr ${doctorFullName} at ${appointment.scheduleDate} ${appointment.scheduleTime}`
+            : `Appointment Confirm at ${appointment.scheduleDate} ${appointment.scheduleTime}`;
+
+        // Pass 16: previously a single EmailTransporter call with `toMail` as a
         // comma-joined "patient@x.com,doctor@y.com" string — both recipients saw each
-        // other's address in the same To: header, and there was no way to tell "did the
-        // patient's copy send" apart from "did the doctor's." Split into two per-
-        // recipient dispatches, matching Notification's one-row-per-recipient model.
+        // other's address in the same To: header. Split into per-recipient dispatches.
         if (appointment.email) {
             NotificationService.dispatchNotification({
                 recipientId: appointment.patientId ?? null,
@@ -346,11 +380,12 @@ const createAppointment = async (payload: any, idempotencyKey?: string): Promise
                 event: 'appointment.scheduled',
                 subject,
                 pathName,
-                replacementObj,
+                replacementObj: appointmentObj,
                 relatedEntityType: 'Appointments',
                 relatedEntityId: appointment.id,
-            }).catch((err) => console.error('Failed to dispatch appointment confirmation notification (patient):', err));
+            }).catch((err) => console.error('Failed to dispatch appointment confirmation notification (patient/guest):', err));
         }
+        // See "3. Doctor notification" above — now fires for both booking paths.
         if (appointment.doctor?.email) {
             NotificationService.dispatchNotification({
                 recipientId: appointment.doctorId,
@@ -359,11 +394,12 @@ const createAppointment = async (payload: any, idempotencyKey?: string): Promise
                 event: 'appointment.scheduled',
                 subject,
                 pathName,
-                replacementObj,
+                replacementObj: appointmentObj,
                 relatedEntityType: 'Appointments',
                 relatedEntityId: appointment.id,
             }).catch((err) => console.error('Failed to dispatch appointment confirmation notification (doctor):', err));
         }
+
         // Pass 7: payment is nested onto the same object rather than restructuring the
         // response envelope — the existing frontend reads appointment fields (id,
         // trackingId, etc.) directly off the top level of this response, and the spread
@@ -372,6 +408,7 @@ const createAppointment = async (payload: any, idempotencyKey?: string): Promise
         await recordIdempotentResponse(tx, idempotencyKey, appointmentWithPayment);
         return appointmentWithPayment;
     });
+
     // Pass 7: gateway order creation happens AFTER the transaction commits, not inside
     // it — see the design note at the top of payment.service.ts for why. Idempotent
     // either way (fresh booking or an idempotency-key replay both land here with a real
@@ -391,128 +428,13 @@ const createAppointment = async (payload: any, idempotencyKey?: string): Promise
         }
     }
     return result;
-}
+};
 
-const createAppointmentByUnAuthenticateUser = async (payload: any, idempotencyKey?: string): Promise<any> => {
-    const { patientInfo, payment } = payload;
-    if(patientInfo.patientId){
-        const isUserExist = await prisma.patient.findUnique({
-            where: {
-                id: patientInfo.patientId
-            }
-        })
-        if (!isUserExist) {
-            patientInfo['patientId'] = null
-        }
-    }
+const createAppointment = (payload: any, idempotencyKey?: string): Promise<Appointments | null | any> =>
+    buildAppointmentCore(payload, idempotencyKey, true);
 
-    const result = await runBookingTransaction(async (tx) => {
-        // Pass 6: same replay-on-duplicate-submit protection as the authenticated path.
-        const replay = await getIdempotentReplay(tx, idempotencyKey);
-        if (replay) return replay;
-
-        // Pass 15 — Tracking & Public Access. See the matching comment in
-        // createAppointment above — same fix, same reason.
-        patientInfo['trackingId'] = generateTrackingId();
-        const doctorIdForUnauth = patientInfo.doctorId || config.defaultAdminDoctor;
-        patientInfo['doctorId'] = doctorIdForUnauth;
-
-        const doctorForFee = await tx.doctor.findUnique({ where: { id: doctorIdForUnauth } });
-        if (!doctorForFee) {
-            throw new ApiError(httpStatus.NOT_FOUND, 'Doctor Account is not found !!');
-        }
-        // Pass 10: same approval check as the authenticated booking path above.
-        if (doctorForFee.approvalStatus !== 'APPROVED') {
-            throw new ApiError(httpStatus.CONFLICT, 'This doctor is not currently accepting bookings !!');
-        }
-        const currency = doctorForFee.currency;
-        // Pass 7: minor units — see api/src/shared/money.ts. Preserves the existing
-        // "60" fallback for a doctor with no price set, now run through the same
-        // currency-aware conversion as everywhere else instead of being a bare number.
-        const docFeeMinor = toMinorUnits(doctorForFee.price ?? '60', currency);
-
-        // Pass 5: same check as the authenticated path — must run before the insert,
-        // inside this transaction. See assertSlotAvailable above.
-        await assertSlotAvailable(tx, doctorIdForUnauth, patientInfo.scheduleDate, patientInfo.scheduleTime);
-
-        const appointment = await tx.appointments.create({
-            data: patientInfo,
-        });
-        const { paymentMethod, paymentType } = payment;
-        const bookingFeeMinor = toMinorUnits(10, currency);
-        const vatMinor = Math.round(0.15 * (docFeeMinor + bookingFeeMinor));
-        // BUG FIX (Pass 7): same totalAmount fix as the authenticated path — previously
-        // omitted bookingFee.
-        const totalAmountMinor = docFeeMinor + bookingFeeMinor + vatMinor;
-        let createdPayment: Payment | null = null;
-        if (appointment.id) {
-            createdPayment = await tx.payment.create({
-                data: {
-                    appointmentId: appointment.id,
-                    bookingFee: bookingFeeMinor,
-                    paymentMethod: paymentMethod,
-                    paymentType: paymentType,
-                    vat: vatMinor,
-                    DoctorFee: docFeeMinor,
-                    totalAmount: totalAmountMinor,
-                    status: PaymentStatus.PENDING,
-                    provider: getProviderForCurrency(currency).name,
-                    currency: currency,
-                }
-            })
-        }
-
-        const appointmentObj = {
-            created: moment(appointment.createdAt).format('LL'),
-            trackingId: appointment.trackingId,
-            patientType: appointment.patientType,
-            status: appointment.status,
-            paymentStatus: appointment.paymentStatus,
-            prescriptionStatus: appointment.prescriptionStatus,
-            scheduleDate:moment(appointment.scheduleDate).format('LL'),
-            scheduleTime:appointment.scheduleTime,
-        }
-        const pathName = path.join(__dirname, '../../../../template/meeting.html')
-        const replacementObj = appointmentObj;
-        const subject = `Appointment Confirm at ${appointment.scheduleDate} ${appointment.scheduleTime}`
-
-        const toMail = `${appointment.email}`;
-        // Pass 16: same reasoning as the authenticated path above — non-blocking,
-        // .catch()-guarded, and now tracked as a real Notification row instead of
-        // leaving no trace beyond a console.error if it silently failed. Guest booking
-        // has no Patient row (recipientId stays null; see the schema comment on
-        // Notification.recipientId).
-        if (toMail) {
-            NotificationService.dispatchNotification({
-                recipientId: null,
-                recipientRole: 'guest',
-                recipientEmail: toMail,
-                event: 'appointment.scheduled',
-                subject,
-                pathName,
-                replacementObj,
-                relatedEntityType: 'Appointments',
-                relatedEntityId: appointment.id,
-            }).catch((err) => console.error('Failed to dispatch guest appointment confirmation notification:', err));
-        }
-        const appointmentWithPayment = { ...appointment, payment: createdPayment };
-        await recordIdempotentResponse(tx, idempotencyKey, appointmentWithPayment);
-        return appointmentWithPayment;
-    })
-
-    // Pass 7: see the identical comment in createAppointment above — gateway order
-    // creation happens after commit, is idempotent, and a failure here doesn't lose the
-    // underlying booking.
-    if (result?.payment?.id) {
-        try {
-            const checkout = await PaymentService.createProviderOrderForPayment(result.payment.id);
-            result.checkout = checkout;
-        } catch (error) {
-            console.error('Failed to create payment gateway order for guest appointment', result.id, error);
-        }
-    }
-    return result;
-}
+const createAppointmentByUnAuthenticateUser = (payload: any, idempotencyKey?: string): Promise<any> =>
+    buildAppointmentCore(payload, idempotencyKey, false);
 
 const getAllAppointments = async (): Promise<Appointments[] | null> => {
     const result = await prisma.appointments.findMany();
