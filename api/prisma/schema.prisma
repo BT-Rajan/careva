@@ -136,11 +136,15 @@ model Doctor {
   approvalStatusChangedBy   String?
   approvalStatusChangeReason String?
   // Pass 7 — Payment System. Determines which regional payment gateway handles bookings
-  // with this doctor: INR → Razorpay, KWD → Telr. Defaults to INR since that was the
-  // implicit assumption everywhere before this pass (no currency concept existed at all).
-  // Existing doctors need this set explicitly post-migration if any are actually
-  // Kuwait-based — a default can't know that.
-  currency               Currency         @default(INR)
+  // with this doctor: INR → Razorpay, KWD → Telr. Was INR — an implicit holdover from
+  // before this pass, when no currency concept existed at all — but this platform
+  // consolidates dentists across Kuwait, so KWD is the correct default for a new doctor
+  // who hasn't explicitly set one, not a leftover default from an unrelated origin
+  // market. Doctors can now correct this themselves in Profile Settings (previously
+  // there was no UI path to change it at all, anywhere — not signup, not profile, not
+  // the admin panel; a Kuwait-based dentist had no way to fix a wrong INR default even
+  // after noticing it).
+  currency               Currency         @default(KWD)
   createdAt              DateTime         @default(now())
   updatedAt              DateTime         @updatedAt
   /// Soft-delete scaffold (Pass 2). Not yet wired into service code — hard `delete()`

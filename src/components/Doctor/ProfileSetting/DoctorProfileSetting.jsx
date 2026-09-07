@@ -210,6 +210,22 @@ const DoctorProfileSetting = () => {
                                         <input defaultValue={data?.price} {...register("price")} type='number' className="form-control" />
                                     </div>
                                 </div>
+                                <div className="col-md-6">
+                                    <div className="form-group mb-2 card-label">
+                                        <label>Currency</label>
+                                        {/* BUG FIX: Doctor.currency defaults to INR in the schema and, until now, had
+                                            no editable field anywhere — not here, not at signup, not in the admin
+                                            panel. A Kuwait-based dentist signing up had no way to correct it, so
+                                            every consultation fee silently priced and charged in Indian Rupees.
+                                            Backend already accepts this field on update (doctor.service.ts's
+                                            DOCTOR_PROTECTED_FIELDS denylist doesn't include it) — this was purely a
+                                            missing-UI gap. */}
+                                        <select defaultValue={data?.currency || 'KWD'} {...register("currency")} className="form-control">
+                                            <option value="KWD">KWD — Kuwaiti Dinar</option>
+                                            <option value="INR">INR — Indian Rupee</option>
+                                        </select>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
