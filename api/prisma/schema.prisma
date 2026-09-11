@@ -24,13 +24,105 @@ model Auth {
   /// When true (admin only): JWT marks user as demo; API blocks mutating requests (read-only).
   isDemo   Boolean  @default(false)
 
+  /// Pass 27 — Multi-Tenant Clinics. Set for `admin` (the one clinic they administer).
+  /// Null for `superadmin` (platform operator, deliberately unscoped — see docs/passes/
+  /// 27-multi-tenant-clinics.md) and for `doctor`/`patient`, whose own clinic scoping
+  /// lives on DoctorClinic/Patient respectively, not here — a doctor can be affiliated
+  /// with more than one clinic, so a single clinicId on their Auth row would be wrong.
+  clinicId String?
+  clinic   Clinic? @relation(fields: [clinicId], references: [id])
+
   /// Pass 3 — brute-force protection. Incremented on each failed login, reset on success.
   failedLoginAttempts Int       @default(0)
   /// Pass 3 — set when failedLoginAttempts crosses the threshold; login is refused while
   /// this is in the future, regardless of whether the password given is correct.
   lockedUntil         DateTime?
 
+  @@index([clinicId])
   @@map("Auth")
+}
+
+// Pass 27 — Multi-Tenant Clinics. A clinic is the tenant boundary: a clinic admin's
+// queries are always scoped to exactly this row's id, and this is what "self-serve
+// create your clinic" signup provisions. See docs/passes/27-multi-tenant-clinics.md for
+// the full design and what's deliberately deferred (Reviews/Blogs/Prescription/Invoice
+// clinicId scoping is Pass 28 — this pass covers Auth/Patient/Appointments/
+// DoctorTimeSlot, the surfaces where the Clinic-A-sees-Clinic-B leak and the doctor
+// schedule collision were both live).
+model Clinic {
+  id     String       @id @default(uuid())
+  name   String
+  /// Public URL slug — e.g. careva.com/dr/{doctorSlug} pages are still doctor-scoped per
+  /// the chosen design, but the slug is reserved here for the admin dashboard, the
+  /// signup flow's availability check, and any future clinic-level page.
+  slug   String       @unique
+  status ClinicStatus @default(ACTIVE)
+
+  /// Per-clinic email sending credentials (Pass 27). Encrypted at rest — *Enc fields
+  /// hold ciphertext, decrypted only at send-time inside the mail service, and are never
+  /// included in any API response. Replaces the single global EMAIL_PASS/GMAIL_APP_EMAIL
+  /// in api/.env, which is retained only as a fallback for clinics that haven't
+  /// configured their own yet (see notification.service.ts).
+  gmailAppEmail   String?
+  gmailAppPassEnc String?
+
+  /// Per-clinic image hosting credentials (Pass 27). Same encryption convention as
+  /// above. `imageProvider` NONE means "not yet configured" — the onboarding wizard
+  /// nudges a new clinic to set this, but doesn't hard-block signup on it.
+  imageProvider     ImageProvider @default(NONE)
+  imageCloudName    String?
+  imageApiKeyEnc    String?
+  imageApiSecretEnc String?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  admins       Auth[]
+  doctors      DoctorClinic[]
+  patients     Patient[]
+  appointments Appointments[]
+  timeSlots    DoctorTimeSlot[]
+
+  @@map("Clinic")
+}
+
+enum ClinicStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum ImageProvider {
+  NONE
+  CLOUDINARY
+  IMAGEKIT
+}
+
+// Pass 27 — Multi-Tenant Clinics. The join that lets one Doctor identity (one login,
+// one email — see Doctor.email below) be affiliated with more than one Clinic. Approval
+// is per-affiliation, not global on Doctor: a doctor can be APPROVED at Clinic A and
+// still PENDING_APPROVAL (or REJECTED) at Clinic B — these used to be the same field on
+// Doctor itself, which was correct back when a doctor could only belong to one clinic
+// implicitly (there was no clinic concept at all) and is wrong now.
+model DoctorClinic {
+  id       String @id @default(uuid())
+  doctorId String
+  doctor   Doctor @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  clinicId String
+  clinic   Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  approvalStatus             DoctorApprovalStatus @default(PENDING_APPROVAL)
+  approvalStatusChangedAt    DateTime?
+  approvalStatusChangedBy    String?
+  approvalStatusChangeReason String?
+
+  joinedAt DateTime @default(now())
+
+  // Public doctor listing (getAllDoctors) filters on this per clinic — same purpose as
+  // the old Doctor.approvalStatus index, just scoped correctly now.
+  @@unique([doctorId, clinicId])
+  @@index([clinicId, approvalStatus])
+  @@map("DoctorClinic")
 }
 
 model UserVerfication {
@@ -67,7 +159,13 @@ model Patient {
   zipCode      String?
   gender       String?
   country      String?
-  email        String         @unique
+  // Pass 27 — Multi-Tenant Clinics. A patient belongs to exactly one clinic (unlike
+  // Doctor — see DoctorClinic). email moves from globally unique to unique-per-clinic
+  // below: two different clinics can now each have their own patient signed up with
+  // the same email address, which is expected once clinics are genuinely independent.
+  clinicId     String
+  clinic       Clinic         @relation(fields: [clinicId], references: [id])
+  email        String
   address      String?
   img          String?
   createdAt    DateTime       @default(now())
@@ -88,6 +186,9 @@ model Patient {
   Prescription Prescription[]
   favourites   Favourites[]
 
+  // Pass 27: replaces the old global @unique on email.
+  @@unique([clinicId, email])
+  @@index([clinicId])
   @@map("Patient")
 }
 
@@ -128,13 +229,12 @@ model Doctor {
   // and behavior — still gates login in auth.service.ts) — it never actually implied
   // admin approval in the schema, but nothing enforced a REAL approval gate either: a
   // never-reviewed doctor was fully bookable and fully public before this pass (see
-  // docs/passes/10-doctor-lifecycle.md). approvalStatus is the separate concept the plan
-  // calls for — see doctor-lifecycle.ts for the transition graph.
+  // docs/passes/10-doctor-lifecycle.md).
+  // Pass 27 — Multi-Tenant Clinics. approvalStatus and its *ChangedAt/By/Reason fields
+  // USED to live here as a single global status. Moved to DoctorClinic: approval is now
+  // per clinic affiliation, since one doctor can be affiliated with several clinics and
+  // approved at one while pending/rejected at another. See DoctorClinic above.
   verified               Boolean?         @default(false)
-  approvalStatus            DoctorApprovalStatus @default(PENDING_APPROVAL)
-  approvalStatusChangedAt   DateTime?
-  approvalStatusChangedBy   String?
-  approvalStatusChangeReason String?
   // Pass 7 — Payment System. Determines which regional payment gateway handles bookings
   // with this doctor: INR → Razorpay, KWD → Telr. Was INR — an implicit holdover from
   // before this pass, when no currency concept existed at all — but this platform
@@ -157,9 +257,12 @@ model Doctor {
   blockedDates           DoctorBlockedDate[]
   blogs                  Blogs[]
   reviews                Reviews[]
+  // Pass 27 — Multi-Tenant Clinics. Replaces the removed global approvalStatus: a
+  // doctor's approval and clinic membership are now both expressed through this
+  // relation. getAllDoctors (public listing) filters on DoctorClinic.approvalStatus
+  // scoped to the requested clinicId — see DoctorClinic's own index.
+  clinics                DoctorClinic[]
 
-  // Pass 10: getAllDoctors (public listing) now filters on this every request.
-  @@index([approvalStatus])
   @@map("Doctor")
 }
 
@@ -176,6 +279,14 @@ model Appointments {
   // from docs/passes/01-domain-state-model.md.
   doctorId  String
   doctor    Doctor   @relation(fields: [doctorId], references: [id], onDelete: Restrict)
+  // Pass 27 — Multi-Tenant Clinics. CANNOT be inferred from doctorId alone anymore — a
+  // doctor can now be affiliated with several clinics (see DoctorClinic), so the same
+  // doctorId legitimately has appointments under different clinicIds. This is the field
+  // that makes the isolation rule work: Clinic A's queries filter on this clinicId, so
+  // Clinic A can see doctor X's appointments at Clinic A and never doctor X's
+  // appointments at Clinic B, nor any other doctor or patient belonging to Clinic B.
+  clinicId  String
+  clinic    Clinic   @relation(fields: [clinicId], references: [id])
 
   trackingId         String?             @unique
   firstName          String?
@@ -224,6 +335,9 @@ model Appointments {
   // Availability/lookup queries filter by doctor + date very frequently (booking flow,
   // doctor dashboard, admin dashboard) — this was previously an unindexed table scan.
   @@index([doctorId, scheduleDate])
+  // Pass 27 — Multi-Tenant Clinics. Every clinic-admin-facing list/count query now
+  // filters by clinicId first — this is the index that query actually hits.
+  @@index([clinicId, status])
   // Admin/doctor dashboards filter and count by status.
   @@index([status])
   @@map("Appointments")
@@ -574,6 +688,13 @@ model DoctorTimeSlot {
 
   doctorId       String
   doctor         Doctor        @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  // Pass 27 — Multi-Tenant Clinics. A doctor affiliated with two clinics needs
+  // independent weekly schedules for each — Dr. X's Monday hours at Clinic A have
+  // nothing to do with their Monday hours at Clinic B. Previously this was implicitly
+  // one global schedule per doctor, which was correct only because a doctor could only
+  // ever belong to one clinic (there was no clinic concept at all).
+  clinicId       String
+  clinic         Clinic        @relation(fields: [clinicId], references: [id], onDelete: Cascade)
   day            Day?
   timeSlot       ScheduleDay[]
   weekDay        String?
@@ -581,6 +702,12 @@ model DoctorTimeSlot {
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
 
+  // Pass 4 fixed create/update lookups to scope by doctorId alone (see
+  // docs/passes/04-authorization-rbac.md §1) — this unique constraint scopes that same
+  // lookup one level further, per clinic, so the fix still holds now that one doctor can
+  // have a DoctorTimeSlot row per clinic instead of just one row total.
+  @@unique([doctorId, clinicId, day])
+  @@index([clinicId])
   @@map("DoctorTimeSlot")
 }
 
@@ -734,6 +861,10 @@ enum NotificationStatus {
 }
 
 enum UserRole {
+  // Pass 27 — Multi-Tenant Clinics. Platform operator — deliberately the one role with
+  // no clinicId, so support/ops can query across clinics. `admin` below now means
+  // "clinic admin," scoped to exactly one clinic via Auth.clinicId.
+  superadmin
   admin
   patient
   doctor
