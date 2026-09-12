@@ -26,9 +26,15 @@ const SelectApppointment = ({ selectedDate, handleDateChange, selectTime, setSel
 
   const selectedDay = selectedDate ? moment(selectedDate).format('dddd').toLowerCase() : undefined;
 
+  // Pass 30 — Multi-Tenant Clinics (frontend wiring). Required by the API since Pass 28
+  // (doctorTimeSlot.service.ts's getAppointmentTimeOfEachDoctor) — same known
+  // limitation as AppointmentPage.jsx's handleConfirmSchedule: picks the doctor's first
+  // APPROVED clinic affiliation, with no picker yet for a genuinely multi-clinic doctor.
+  const clinicId = selectedDoctor?.clinics?.[0]?.clinicId;
+
   const { data: timeData, isLoading: isLoadingTimes, isFetching: isFetchingTimes } = useGetAppointmentTimeQuery(
-    { day: selectedDay, date: selectedDate, id: selectedDoctor?.id },
-    { skip: !selectedDoctor?.id || !selectedDate }
+    { day: selectedDay, date: selectedDate, id: selectedDoctor?.id, clinicId },
+    { skip: !selectedDoctor?.id || !selectedDate || !clinicId }
   );
 
   // RTK Query's axiosBaseQuery + response interceptor already unwrap to the inner data

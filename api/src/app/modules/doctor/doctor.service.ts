@@ -185,10 +185,21 @@ const getAllDoctors = async (filters: IDoctorFilters, options: IOption, includeA
     }
 
     const whereCondition = andCondition.length > 0 ? { AND: andCondition } : {};
+    // Pass 30 — Multi-Tenant Clinics (frontend wiring). The admin table needs the
+    // affiliation's approvalStatus, which no longer lives directly on Doctor (Pass 27).
+    // Scoped to the SAME clinicId already used to filter above — an admin should only
+    // ever see their own clinic's affiliation row, never another clinic's, even in this
+    // nested include. On the public (no clinicId) path, restricted to APPROVED only —
+    // a doctor's PENDING/REJECTED/SUSPENDED standing at some OTHER clinic is not public
+    // information, even though this same doctor is legitimately listed here via a
+    // different, APPROVED affiliation.
     const result = await prisma.doctor.findMany({
         skip,
         take: limit,
         where: whereCondition,
+        include: {
+            clinics: clinicId ? { where: { clinicId } } : { where: { approvalStatus: 'APPROVED' } },
+        },
     });
 
     const total = await prisma.doctor.count({ where: whereCondition });
@@ -202,11 +213,20 @@ const getAllDoctors = async (filters: IDoctorFilters, options: IOption, includeA
     }
 }
 
+// Pass 30 — Multi-Tenant Clinics (frontend wiring). This is what the individual doctor
+// page (and the booking flow reading from it — see SelectApppointment.jsx) actually
+// fetches. Without `clinics` included, the frontend has no way to know which clinicId
+// to book this doctor at, or to detect the (currently unhandled — see that component's
+// comment) case of a doctor affiliated with more than one clinic. Same APPROVED-only
+// restriction as the public listing above, for the same reason.
 const getDoctor = async (id: string): Promise<Doctor | null> => {
     const result = await prisma.doctor.findUnique({
         where: {
             id: id
-        }
+        },
+        include: {
+            clinics: { where: { approvalStatus: 'APPROVED' } },
+        },
     });
     return result;
 }

@@ -2,12 +2,21 @@ import DashboardLayout from '../DashboardLayout/DashboardLayout';
 import React, { useEffect, useState } from 'react';
 import { Card, Tag, Button, Empty, message, TimePicker, Modal, Tabs } from 'antd';
 import { useCreateTimeSlotMutation, useGetDoctorTimeSlotQuery, useUpdateTimeSlotMutation, useGetBlockedDatesQuery, useCreateBlockedDateMutation, useDeleteBlockedDateMutation } from '../../../redux/api/timeSlotApi';
+import { useGetDoctorQuery } from '../../../redux/api/doctorApi';
+import useAuthCheck from '../../../redux/hooks/useAuthCheck';
 import { FaPlus, FaEdit, FaTrash, FaClock, FaCalendarTimes } from "react-icons/fa";
 import moment from 'moment';
 import { DatePicker } from 'antd';
 import './Schedule.css';
 
 const Schedule = () => {
+    const { data: userData } = useAuthCheck();
+    // Pass 30 — Multi-Tenant Clinics (frontend wiring). Required by the API since
+    // Pass 28 (doctorTimeSlot.service.ts's createTimeSlot) — same known limitation as
+    // AddBlog.jsx: picks the doctor's first APPROVED clinic, no picker yet for a
+    // genuinely multi-clinic doctor managing separate schedules per clinic.
+    const { data: doctorData } = useGetDoctorQuery(userData?.id, { skip: !userData?.id });
+    const clinicId = doctorData?.clinics?.[0]?.clinicId;
     const [activeDay, setActiveDay] = useState('sunday');
     const [timeSlot, setTimeSlot] = useState([]);
     const [editTimeSlot, setEditTimeSlot] = useState([]);
@@ -132,7 +141,8 @@ const Schedule = () => {
         const timeSlots = validTimeSlots.map(({ id, ...rest }) => rest);
         const data = {
             day: activeDay,
-            timeSlot: timeSlots
+            timeSlot: timeSlots,
+            clinicId,
         }
         createTimeSlot({ data });
     };

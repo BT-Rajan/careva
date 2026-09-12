@@ -28,10 +28,14 @@ export const timeSlotApi = baseApi.injectEndpoints({
             providesTags: [tagTypes.timeSlot]
         }),
         getAppointmentTime: build.query({
-            query: ({ day, date, id }) => ({
+            // Pass 30 — Multi-Tenant Clinics (frontend wiring). clinicId is required by
+            // the API since Pass 28 (doctorTimeSlot.service.ts's
+            // getAppointmentTimeOfEachDoctor) — a doctor's schedule/capacity is now
+            // per-clinic, not global.
+            query: ({ day, date, id, clinicId }) => ({
                 url: `${TIMELOT_URL}/appointment-time/${id}`,
                 method: 'GET',
-                params: { day, date }
+                params: { day, date, clinicId }
             }
             ),
             providesTags: [tagTypes.timeSlot]
