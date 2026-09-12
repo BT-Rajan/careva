@@ -32,3 +32,9 @@ at a time, in order. Each pass is committed and pushed on completion.
 | 25 | Testing | ✅ Complete |
 | 26 | Production Readiness | ✅ Complete |
 | — | Final — Adversarial Stress Test | ⏳ Not started |
+| 27 | Multi-Tenant Clinics (schema) | ✅ Schema complete — see doc |
+| 28 | Multi-Tenant Clinics (query scoping — core booking flow) | ✅ Partial — see doc |
+| 29 | Multi-Tenant Clinics (remaining modules + frontend) | ⏳ Not started |
+| 30 | Per-Clinic Email & Doctor Pages | ⏳ Not started |
+| 31 | Per-Clinic Image Hosting | ⏳ Not started |
+| 32 | Self-Serve Clinic Signup | ⏳ Not started |

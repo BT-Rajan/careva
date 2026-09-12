@@ -44,11 +44,18 @@ const paymentCore = z.object({
 // doctorId required — the authenticated create path 404s if it's missing/invalid
 // anyway (appointment.service.ts looks it up unconditionally), so requiring it here
 // just moves that failure from a service-layer NOT_FOUND to a cleaner 400.
+//
+// Pass 28 — Multi-Tenant Clinics (query scoping). clinicId is optional here on purpose:
+// for an authenticated patient booking, appointment.service.ts overwrites whatever is
+// sent with the patient's OWN Patient.clinicId (a patient can't book at a clinic they
+// don't belong to) — see buildAppointmentCore. It's still required overall by the
+// service layer when there's no patientId to derive it from.
 const CreateAppointmentValidation = z.object({
     body: z.object({
         patientInfo: z.object({
             ...patientInfoCore,
             doctorId: z.string().min(1, 'Doctor is required'),
+            clinicId: z.string().optional(),
         }),
         payment: paymentCore,
     }),
@@ -57,11 +64,17 @@ const CreateAppointmentValidation = z.object({
 // doctorId optional here — createAppointmentByUnAuthenticateUser falls back to
 // config.defaultAdminDoctor when it's absent; that's an intentional product behavior
 // for the guest path, not something this schema should block.
+//
+// Pass 28 — Multi-Tenant Clinics (query scoping). clinicId IS required here — a guest
+// has no Patient record for the server to derive it from (unlike the authenticated
+// path above), so the individual doctor page they're booking from must supply which
+// clinic they're booking the doctor at.
 const CreateAppointmentByUnAuthenticateUserValidation = z.object({
     body: z.object({
         patientInfo: z.object({
             ...patientInfoCore,
             doctorId: z.string().optional(),
+            clinicId: z.string().min(1, 'clinicId is required'),
         }),
         payment: paymentCore,
     }),

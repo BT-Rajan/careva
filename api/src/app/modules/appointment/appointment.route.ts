@@ -11,7 +11,7 @@ const router = express.Router();
 // Pass 4: GET / previously had no auth at all — every appointment's PII/PHI was
 // listable by anyone. It's genuinely used (admin dashboard, via adminApi.js's
 // getAllAppointments), so it's restricted to admin rather than removed.
-router.get('/', auth(AuthUser.ADMIN), AppointmentController.getAllAppointment);
+router.get('/', auth(AuthUser.ADMIN, AuthUser.SUPER_ADMIN), AppointmentController.getAllAppointment);
 
 router.get('/patient/appointments',auth(AuthUser.PATIENT), AppointmentController.getPatientAppointmentById);
 
@@ -45,17 +45,17 @@ router.post('/create-un-authenticate', appointmentCreateRateLimiter, validateReq
 // goes through POST /tracking (trackingId is a real random token — see
 // shared/trackingId.ts — making that endpoint's public reachability the correct design,
 // not a gap).
-router.get('/:id', auth(AuthUser.PATIENT, AuthUser.DOCTOR, AuthUser.ADMIN), AppointmentController.getAppointment);
+router.get('/:id', auth(AuthUser.PATIENT, AuthUser.DOCTOR, AuthUser.ADMIN, AuthUser.SUPER_ADMIN), AppointmentController.getAppointment);
 
 // Pass 4: previously no auth at all — anyone could destroy any appointment record.
 // Confirmed unused by the frontend today (no delete-appointment UI exists anywhere).
-router.delete('/:id', auth(AuthUser.ADMIN), AppointmentController.deleteAppointment);
-router.patch('/:id', auth(AuthUser.ADMIN, AuthUser.DOCTOR, AuthUser.PATIENT),AppointmentController.updateAppointment);
+router.delete('/:id', auth(AuthUser.ADMIN, AuthUser.SUPER_ADMIN), AppointmentController.deleteAppointment);
+router.patch('/:id', auth(AuthUser.ADMIN, AuthUser.SUPER_ADMIN, AuthUser.DOCTOR, AuthUser.PATIENT),AppointmentController.updateAppointment);
 // Pass 9 — Cancellation & Rescheduling. Dedicated endpoints, deliberately separate from
 // the generic PATCH /:id above — see appointment.service.ts's updateAppointment for why
 // cancel-type transitions are blocked there and must come through here instead.
-router.post('/:id/cancel', auth(AuthUser.ADMIN, AuthUser.DOCTOR, AuthUser.PATIENT), AppointmentController.cancelAppointment);
-router.post('/:id/reschedule', auth(AuthUser.ADMIN, AuthUser.DOCTOR, AuthUser.PATIENT), AppointmentController.rescheduleAppointment);
+router.post('/:id/cancel', auth(AuthUser.ADMIN, AuthUser.SUPER_ADMIN, AuthUser.DOCTOR, AuthUser.PATIENT), AppointmentController.cancelAppointment);
+router.post('/:id/reschedule', auth(AuthUser.ADMIN, AuthUser.SUPER_ADMIN, AuthUser.DOCTOR, AuthUser.PATIENT), AppointmentController.rescheduleAppointment);
 //doctor side
 router.patch('/doctor/update-appointment',auth(AuthUser.DOCTOR), AppointmentController.updateAppointmentByDoctor);
 

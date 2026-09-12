@@ -51,10 +51,15 @@ const assertNoOverlap = (newRange: { startTime: string; endTime: string }, exist
  */
 const CANCEL_LIKE_STATUSES = ['DECLINED', 'CANCELLED_BY_PATIENT', 'CANCELLED_BY_DOCTOR', 'CANCELLED_BY_ADMIN', 'EXPIRED'];
 
-const getFutureActiveAppointmentsForWeekday = async (doctorId: string, day: string) => {
+// Pass 28 — Multi-Tenant Clinics (query scoping). clinicId added — a doctor's schedule
+// at Clinic A is deleted independently of Clinic B (Pass 27), so the "does this affect
+// any future appointment" check must only look at appointments AT THE CLINIC whose
+// schedule is being touched, not the doctor's appointments everywhere.
+const getFutureActiveAppointmentsForWeekday = async (doctorId: string, clinicId: string, day: string) => {
     const appointments = await prisma.appointments.findMany({
         where: {
             doctorId,
+            clinicId,
             status: { notIn: CANCEL_LIKE_STATUSES as any },
         },
         select: { id: true, scheduleDate: true, scheduleTime: true }
@@ -78,6 +83,23 @@ const createTimeSlot = async (user: any, payload: any): Promise<DoctorTimeSlot |
         throw new ApiError(httpStatus.NOT_FOUND, 'Doctor Account is not found !!')
     }
 
+    // Pass 28 — Multi-Tenant Clinics (query scoping). DoctorTimeSlot now carries its own
+    // clinicId (Pass 27) — a doctor's schedule at Clinic A is independent of their
+    // schedule at Clinic B, so the request must say which clinic this schedule is for,
+    // and the doctor must actually be affiliated with it (any status — even
+    // PENDING_APPROVAL can set up their schedule ahead of being reviewed; APPROVED is
+    // only required for the schedule to become bookable, enforced in
+    // appointment.service.ts's booking flow instead).
+    if (!payload.clinicId) {
+        throw new ApiError(httpStatus.BAD_REQUEST, 'clinicId is required !!');
+    }
+    const affiliation = await prisma.doctorClinic.findUnique({
+        where: { doctorId_clinicId: { doctorId: isDoctor.id, clinicId: payload.clinicId } },
+    });
+    if (!affiliation) {
+        throw new ApiError(httpStatus.FORBIDDEN, 'You are not affiliated with this clinic !!');
+    }
+
     const submittedRanges: { startTime: string; endTime: string }[] = payload.timeSlot ?? [];
     for (const range of submittedRanges) {
         assertValidTimeRange(range.startTime, range.endTime);
@@ -91,6 +113,7 @@ const createTimeSlot = async (user: any, payload: any): Promise<DoctorTimeSlot |
         const isAlreadyExist = await tx.doctorTimeSlot.findFirst({
             where:{
                 doctorId: isDoctor.id,
+                clinicId: payload.clinicId,
                 day: payload.day
             }
         })
@@ -102,6 +125,7 @@ const createTimeSlot = async (user: any, payload: any): Promise<DoctorTimeSlot |
             data: {
                 day: payload.day,
                 doctorId: isDoctor.id,
+                clinicId: payload.clinicId,
                 maximumPatient: payload.maximumPatient,
                 weekDay: payload.weekDay,
                 timeSlot: {
@@ -134,7 +158,7 @@ const deleteTimeSlot = async (user: any, id: string): Promise<DoctorTimeSlot | n
     // handles refunds correctly) rather than quietly deleting the schedule they were
     // booked against.
     if (existing.day) {
-        const affected = await getFutureActiveAppointmentsForWeekday(existing.doctorId, existing.day);
+        const affected = await getFutureActiveAppointmentsForWeekday(existing.doctorId, existing.clinicId, existing.day);
         if (affected.length > 0) {
             throw new ApiError(httpStatus.CONFLICT, `Cannot delete this schedule — ${affected.length} upcoming appointment(s) are booked on ${existing.day}. Cancel or reschedule them first.`);
         }
@@ -283,7 +307,7 @@ const updateTimeSlot = async (user: any, id: string, payload: any): Promise<{ me
             // already booked within the portion being removed. Growing a range, or
             // moving it without shrinking the covered portion, is always fine.
             if (before.doctorTimeSlot.day) {
-                const affected = await getFutureActiveAppointmentsForWeekday(isDoctor.id, before.doctorTimeSlot.day);
+                const affected = await getFutureActiveAppointmentsForWeekday(isDoctor.id, before.doctorTimeSlot.clinicId, before.doctorTimeSlot.day);
                 const oldStart = moment(before.startTime, TIME_FORMATS);
                 const oldEnd = moment(before.endTime, TIME_FORMATS);
                 const newStart = moment(others.startTime, TIME_FORMATS);
@@ -349,9 +373,18 @@ const getAppointmentTimeOfEachDoctor = async (id: string, filter: any): Promise<
         }
     }
 
+    // Pass 28 — Multi-Tenant Clinics (query scoping). Without clinicId, a doctor
+    // affiliated with two clinics would have BOTH clinics' schedules merged into one
+    // combined availability view — wrong, since the same weekday can have two
+    // independent DoctorTimeSlot rows now (Pass 27). The individual doctor page a
+    // patient is booking from is expected to supply which clinic they're booking at.
+    if (!filter.clinicId) {
+        throw new ApiError(httpStatus.BAD_REQUEST, 'clinicId is required !!');
+    }
     const doctorTimSlot = await prisma.doctorTimeSlot.findMany({
         where: {
-            doctorId: id
+            doctorId: id,
+            clinicId: filter.clinicId,
         },
         include: {
             timeSlot: true
@@ -403,11 +436,15 @@ const getAppointmentTimeOfEachDoctor = async (id: string, filter: any): Promise<
     // booking time, so the caller is responsible for sending the same date format to
     // both this endpoint and the actual booking submission. See
     // SelectApppointment.jsx, which does exactly that.
+    //
+    // Pass 28: clinicId added here too — capacity at Clinic A must not be affected by
+    // (or mistaken for) the same doctor's bookings at Clinic B.
     if (filter.date && matchingDaySlot) {
         const existingCounts = await prisma.appointments.groupBy({
             by: ['scheduleTime'],
             where: {
                 doctorId: id,
+                clinicId: filter.clinicId,
                 scheduleDate: filter.date,
                 status: { notIn: CANCEL_LIKE_STATUSES as any }
             },

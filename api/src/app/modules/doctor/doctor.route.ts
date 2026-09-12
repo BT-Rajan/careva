@@ -13,19 +13,19 @@ router.get('/', DoctorController.getAllDoctors);
 // every approval status, for the review queue — the public route now filters to
 // APPROVED only (see doctor.service.ts), so admin needs a separate way to see doctors
 // still pending review. Registered before /:id so "admin" is never captured as an id.
-router.get('/admin/all', auth(AuthUser.ADMIN), DoctorController.getAllDoctorsForAdmin);
+router.get('/admin/all', auth(AuthUser.ADMIN, AuthUser.SUPER_ADMIN), DoctorController.getAllDoctorsForAdmin);
 router.post('/', validateRequest(DoctorValidation.CreateDoctorValidation), DoctorController.createDoctor);
 router.get('/:id', DoctorController.getDoctor);
-router.delete('/:id', auth(AuthUser.DOCTOR, AuthUser.ADMIN), DoctorController.deleteDoctor);
+router.delete('/:id', auth(AuthUser.DOCTOR, AuthUser.ADMIN, AuthUser.SUPER_ADMIN), DoctorController.deleteDoctor);
 router.patch('/:id',
     CloudinaryHelper.upload.single('file'),
-    auth(AuthUser.DOCTOR, AuthUser.ADMIN),
+    auth(AuthUser.DOCTOR, AuthUser.ADMIN, AuthUser.SUPER_ADMIN),
     (req: Request, res: Response, next: NextFunction) => {
         return DoctorController.updateDoctor(req, res, next);
     }
 );
 // Pass 10: dedicated approval-status endpoint — see doctor.service.ts's updateDoctor for
 // why approvalStatus is unconditionally rejected on the generic PATCH /:id above.
-router.patch('/:id/approval-status', auth(AuthUser.DOCTOR, AuthUser.ADMIN), DoctorController.updateApprovalStatus);
+router.patch('/:id/approval-status', auth(AuthUser.DOCTOR, AuthUser.ADMIN, AuthUser.SUPER_ADMIN), DoctorController.updateApprovalStatus);
 
 export const DoctorRouter = router;

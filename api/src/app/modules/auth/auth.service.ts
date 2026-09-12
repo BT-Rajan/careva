@@ -48,13 +48,14 @@ const loginUser = async (user: any): Promise<ILginResponse> => {
             throw new ApiError(httpStatus.NOT_FOUND, "Please Verify Your Email First !");
         }
         // Pass 10 — Doctor Lifecycle. Separate from the email-verification check above —
-        // a doctor can be fully email-verified and still SUSPENDED or DEACTIVATED. Does
-        // NOT block PENDING_APPROVAL or REJECTED: a doctor should still be able to log
-        // in to see their status and finish/fix their profile while awaiting or
-        // recovering from a review decision.
-        if (getDoctorInfo && (getDoctorInfo.approvalStatus === 'SUSPENDED' || getDoctorInfo.approvalStatus === 'DEACTIVATED')) {
-            throw new ApiError(httpStatus.FORBIDDEN, `Your account is ${getDoctorInfo.approvalStatus.toLowerCase()}. Contact support if you believe this is a mistake.`);
-        }
+        // a doctor can be fully email-verified and still SUSPENDED or DEACTIVATED.
+        // Pass 28 — Multi-Tenant Clinics. This USED to check a single global
+        // Doctor.approvalStatus and block login entirely. That field moved to
+        // DoctorClinic (per-affiliation) in Pass 27: a doctor suspended at Clinic A
+        // must still be able to log in to see/manage their standing at Clinic B, so
+        // login can no longer block on this at all. Per-clinic suspension is enforced
+        // instead at the point a doctor tries to act within that specific clinic
+        // (booking availability, that clinic's dashboard) — see doctor.service.ts.
     }
     const isPasswordMatched = await bcrypt.compare(password, isUserExist.password);
 
@@ -110,15 +111,20 @@ const loginUser = async (user: any): Promise<ILginResponse> => {
         }
     });
 
-    const { role, userId, isDemo, email: userEmail } = isUserExist;
+    const { role, userId, isDemo, email: userEmail, clinicId } = isUserExist;
+    // Pass 28 — Multi-Tenant Clinics (query scoping). clinicId now rides in the token
+    // for 'admin' and 'patient' (their one clinic) and 'superadmin' has none by design
+    // — see docs/passes/27-multi-tenant-clinics.md's JWT table. 'doctor' deliberately
+    // gets none either: a doctor's own identity is cross-clinic (DoctorClinic), so
+    // there is no single clinicId to embed for them.
     const accessToken = JwtHelper.createToken(
-        { role, userId, email: userEmail, isDemo: role === 'admin' ? Boolean(isDemo) : false },
+        { role, userId, email: userEmail, isDemo: role === 'admin' ? Boolean(isDemo) : false, clinicId: clinicId ?? null },
         config.jwt.secret as Secret,
         config.jwt.JWT_EXPIRES_IN as string
     )
     return {
         accessToken,
-        user: { role, userId, email: userEmail, isDemo: role === 'admin' ? Boolean(isDemo) : false },
+        user: { role, userId, email: userEmail, isDemo: role === 'admin' ? Boolean(isDemo) : false, clinicId: clinicId ?? null },
     }
 }
 
@@ -137,15 +143,15 @@ const VerificationUser = async (user: any): Promise<ILginResponse> => {
     if (!isPasswordMatched) {
         throw new ApiError(httpStatus.NOT_FOUND, "Password is not Matched !");
     }
-    const { role, userId, isDemo, email: userEmail } = isUserExist;
+    const { role, userId, isDemo, email: userEmail, clinicId } = isUserExist;
     const accessToken = JwtHelper.createToken(
-        { role, userId, email: userEmail, isDemo: role === 'admin' ? Boolean(isDemo) : false },
+        { role, userId, email: userEmail, isDemo: role === 'admin' ? Boolean(isDemo) : false, clinicId: clinicId ?? null },
         config.jwt.secret as Secret,
         config.jwt.JWT_EXPIRES_IN as string
     )
     return {
         accessToken,
-        user: { role, userId, email: userEmail, isDemo: role === 'admin' ? Boolean(isDemo) : false },
+        user: { role, userId, email: userEmail, isDemo: role === 'admin' ? Boolean(isDemo) : false, clinicId: clinicId ?? null },
     }
 }
 

@@ -14,7 +14,11 @@ const createPatient = catchAsync(async (req: Request, res: Response) => {
 })
 
 const getAllPatients = catchAsync(async (req: Request, res: Response) => {
-    const result = await PatientService.getAllPatients();
+    // Pass 28 — Multi-Tenant Clinics (query scoping). Same fix pattern used everywhere
+    // else in this pass: clinicId comes from the admin's own verified token, never
+    // from the client. undefined only for super_admin.
+    const clinicId = req.user?.role === 'super_admin' ? undefined : (req.user as any)?.clinicId;
+    const result = await PatientService.getAllPatients(clinicId);
     sendResponse<Patient[]>(res, {
         statusCode: 200,
         message: 'Successfully Get Patients !!',
