@@ -10,9 +10,9 @@ const router = express.Router();
 // would try to match "doctor"/"patient" as an :id value.
 router.get('/doctor', auth(AuthUser.DOCTOR), InvoiceController.getDoctorInvoices);
 router.get('/patient', auth(AuthUser.PATIENT), InvoiceController.getPatientInvoices);
-router.get('/appointment/:appointmentId', auth(AuthUser.PATIENT, AuthUser.DOCTOR, AuthUser.ADMIN), InvoiceController.getInvoiceByAppointmentId);
-router.get('/:id', auth(AuthUser.PATIENT, AuthUser.DOCTOR, AuthUser.ADMIN), InvoiceController.getInvoiceById);
-router.patch('/:id/void', auth(AuthUser.ADMIN), InvoiceController.voidInvoice);
-router.post('/:id/correct', auth(AuthUser.ADMIN), InvoiceController.correctInvoice);
+router.get('/appointment/:appointmentId', auth(AuthUser.PATIENT, AuthUser.DOCTOR, AuthUser.ADMIN, AuthUser.SUPER_ADMIN), InvoiceController.getInvoiceByAppointmentId);
+router.get('/:id', auth(AuthUser.PATIENT, AuthUser.DOCTOR, AuthUser.ADMIN, AuthUser.SUPER_ADMIN), InvoiceController.getInvoiceById);
+router.patch('/:id/void', auth(AuthUser.ADMIN, AuthUser.SUPER_ADMIN), InvoiceController.voidInvoice);
+router.post('/:id/correct', auth(AuthUser.ADMIN, AuthUser.SUPER_ADMIN), InvoiceController.correctInvoice);
 
 export const InvoiceRouter = router;

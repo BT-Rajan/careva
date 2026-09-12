@@ -78,6 +78,10 @@ const createPrescription = async (user: any, paylaod: any): Promise<{message: st
                 ...rest,
                 doctorId: isDoctor.id,
                 patientId: isAppointment.patientId,
+                // Pass 29 — Multi-Tenant Clinics (remaining modules). clinicId is now
+                // required on Prescription — denormalized from the appointment being
+                // treated, same as Invoice.
+                clinicId: isAppointment.clinicId,
                 medicines: undefined
             }
         });
@@ -175,6 +179,9 @@ const updatePrescriptionAndAppointment = async (user: any, paylaod: any): Promis
                 doctorId: isPrescribed.doctorId,
                 patientId: isPrescribed.patientId,
                 appointmentId: isPrescribed.appointmentId,
+                // Pass 29 — Multi-Tenant Clinics. A correction is the same visit, same
+                // clinic — carried forward from the original rather than re-derived.
+                clinicId: isPrescribed.clinicId,
                 disease: isPrescribed.disease,
                 daignosis: isPrescribed.daignosis,
                 test: isPrescribed.test,
@@ -244,9 +251,12 @@ const markPrescriptionFulfilled = async (reqUser: any, id: string): Promise<Pres
         throw new ApiError(httpStatus.NOT_FOUND, 'Prescription is not found !!');
     }
     const role = reqUser?.role as PrescriptionActorRole;
-    const isAdmin = role === 'admin';
+    const isSuperAdmin = reqUser?.role === 'super_admin';
+    // Pass 29 — Multi-Tenant Clinics. An 'admin' bypassed ownership entirely before —
+    // scoped to their own clinic now; super_admin unrestricted.
+    const isAdmin = role === 'admin' && existing.clinicId === reqUser?.clinicId;
     const isOwner = existing.doctorId === reqUser?.userId || existing.patientId === reqUser?.userId;
-    if (!isAdmin && !isOwner) {
+    if (!isSuperAdmin && !isAdmin && !isOwner) {
         throw new ApiError(httpStatus.FORBIDDEN, 'You are not allowed to update this prescription !!');
     }
     assertValidPrescriptionTransition(existing.status, 'FULFILLED', role);
@@ -277,8 +287,9 @@ const archivePrescription = async (reqUser: any, id: string): Promise<Prescripti
         throw new ApiError(httpStatus.NOT_FOUND, 'Prescription is not found !!');
     }
     const role = reqUser?.role as PrescriptionActorRole;
-    const isAdmin = role === 'admin';
-    if (!isAdmin && existing.doctorId !== reqUser?.userId) {
+    const isSuperAdmin = reqUser?.role === 'super_admin';
+    const isAdmin = role === 'admin' && existing.clinicId === reqUser?.clinicId;
+    if (!isSuperAdmin && !isAdmin && existing.doctorId !== reqUser?.userId) {
         throw new ApiError(httpStatus.FORBIDDEN, 'You are not allowed to update this prescription !!');
     }
     assertValidPrescriptionTransition(existing.status, 'ARCHIVED', role);
@@ -299,11 +310,19 @@ const archivePrescription = async (reqUser: any, id: string): Promise<Prescripti
     return result;
 }
 
-const getAllPrescriptions = async (): Promise<Prescription[] | null> => {
+// Pass 29 — Multi-Tenant Clinics (remaining modules). Same leak shape as
+// appointment.service.ts's getAllAppointments (Pass 28) — no filter at all, gated only
+// by role. This one is arguably worse: it exposes diagnosis and medication data across
+// clinics, not just scheduling metadata.
+const getAllPrescriptions = async (reqUser?: any): Promise<Prescription[] | null> => {
+    const isSuperAdmin = reqUser?.role === 'super_admin';
     // Pass 13: a soft-deleted prescription is deactivated, not gone — dropped from
     // every listing, same convention as Pass 12's Patient soft-delete.
     const result = await prisma.prescription.findMany({
-        where: { ...ACTIVE_PRESCRIPTION_FILTER },
+        where: {
+            ...ACTIVE_PRESCRIPTION_FILTER,
+            ...(isSuperAdmin ? {} : { clinicId: reqUser?.clinicId }),
+        },
         include: {
             appointment: {
                 select: {
@@ -370,9 +389,13 @@ const getPrescriptionById = async (reqUser: any, id: string): Promise<Prescripti
     // could fetch any prescription by id. Now: the prescribing doctor, the patient it
     // belongs to, or an admin.
     if (result) {
-        const isAdmin = reqUser?.role === 'admin';
+        const isSuperAdmin = reqUser?.role === 'super_admin';
+        // Pass 29 — Multi-Tenant Clinics. Scoped to the admin's own clinic — this
+        // endpoint returns full diagnosis, medication, and patient contact details, so
+        // an unscoped admin check here would be a serious cross-clinic PHI leak.
+        const isAdmin = reqUser?.role === 'admin' && result.clinicId === reqUser?.clinicId;
         const isOwner = result.doctorId === reqUser?.userId || result.patientId === reqUser?.userId;
-        if (!isAdmin && !isOwner) {
+        if (!isSuperAdmin && !isAdmin && !isOwner) {
             throw new ApiError(httpStatus.FORBIDDEN, 'You are not allowed to view this prescription !!');
         }
     }
@@ -451,8 +474,9 @@ const deletePrescription = async (reqUser: any, id: string): Promise<any> => {
     if (!existing) {
         throw new ApiError(httpStatus.NOT_FOUND, 'Prescription is not found !!');
     }
-    const isAdmin = reqUser?.role === 'admin';
-    if (!isAdmin && existing.doctorId !== reqUser?.userId) {
+    const isSuperAdmin = reqUser?.role === 'super_admin';
+    const isAdmin = reqUser?.role === 'admin' && existing.clinicId === reqUser?.clinicId;
+    if (!isSuperAdmin && !isAdmin && existing.doctorId !== reqUser?.userId) {
         throw new ApiError(httpStatus.FORBIDDEN, 'You are not allowed to delete this prescription !!');
     }
     const result = await prisma.$transaction(async (tx) => {
@@ -478,12 +502,17 @@ const deletePrescription = async (reqUser: any, id: string): Promise<any> => {
 // Pass 13: companion to the soft-delete above — admin-only restore, same convention as
 // Pass 12's Patient.reactivatePatient.
 const reactivatePrescription = async (reqUser: any, id: string): Promise<Prescription> => {
-    if (reqUser?.role !== 'admin') {
+    const isSuperAdmin = reqUser?.role === 'super_admin';
+    if (reqUser?.role !== 'admin' && !isSuperAdmin) {
         throw new ApiError(httpStatus.FORBIDDEN, 'Only an admin can restore a deleted prescription !!');
     }
     const existing = await prisma.prescription.findUnique({ where: { id } });
     if (!existing) {
         throw new ApiError(httpStatus.NOT_FOUND, 'Prescription is not found !!');
+    }
+    // Pass 29 — Multi-Tenant Clinics.
+    if (!isSuperAdmin && existing.clinicId !== reqUser?.clinicId) {
+        throw new ApiError(httpStatus.FORBIDDEN, 'Only an admin can restore a deleted prescription !!');
     }
     if (!existing.deletedAt) {
         throw new ApiError(httpStatus.CONFLICT, 'This prescription is not deleted !!');

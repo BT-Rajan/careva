@@ -56,10 +56,14 @@ const generateInvoiceForAppointment = async (tx: Tx, appointmentId: string, acto
         // (e.g. a legacy/guest booking predating Pass 7) — nothing to invoice.
         return null;
     }
+    // Pass 29 — Multi-Tenant Clinics (remaining modules). clinicId is now required on
+    // Invoice — denormalized from the appointment being billed, same as Prescription.
+    const appointment = await tx.appointments.findUniqueOrThrow({ where: { id: appointmentId } });
     const invoiceNumber = await nextInvoiceNumber(tx);
     const invoice = await tx.invoice.create({
         data: {
             appointmentId,
+            clinicId: appointment.clinicId,
             paymentId: payment.id,
             invoiceNumber,
             status: payment.status === PaymentStatus.SUCCEEDED ? 'PAID' : 'ISSUED',
@@ -193,10 +197,13 @@ const getInvoiceById = async (reqUser: any, id: string): Promise<Invoice | null>
     if (!invoice) {
         throw new ApiError(httpStatus.NOT_FOUND, 'Invoice is not found !!');
     }
-    const isAdmin = reqUser?.role === 'admin';
+    const isSuperAdmin = reqUser?.role === 'super_admin';
+    // Pass 29 — Multi-Tenant Clinics (remaining modules). Scoped to the admin's own
+    // clinic — this returns billing/payment data across two patients' worth of PII.
+    const isAdmin = reqUser?.role === 'admin' && invoice.clinicId === reqUser?.clinicId;
     const appt = invoice.appointment as any;
     const isOwner = appt?.patientId === reqUser?.userId || appt?.doctorId === reqUser?.userId;
-    if (!isAdmin && !isOwner) {
+    if (!isSuperAdmin && !isAdmin && !isOwner) {
         throw new ApiError(httpStatus.FORBIDDEN, 'You are not allowed to view this invoice !!');
     }
     return invoice;
@@ -207,9 +214,10 @@ const getInvoiceByAppointmentId = async (reqUser: any, appointmentId: string): P
     if (!appointment) {
         throw new ApiError(httpStatus.NOT_FOUND, 'Appointment is not found !!');
     }
-    const isAdmin = reqUser?.role === 'admin';
+    const isSuperAdmin = reqUser?.role === 'super_admin';
+    const isAdmin = reqUser?.role === 'admin' && appointment.clinicId === reqUser?.clinicId;
     const isOwner = appointment.patientId === reqUser?.userId || appointment.doctorId === reqUser?.userId;
-    if (!isAdmin && !isOwner) {
+    if (!isSuperAdmin && !isAdmin && !isOwner) {
         throw new ApiError(httpStatus.FORBIDDEN, 'You are not allowed to view this invoice !!');
     }
     // Most-recent-first: if this appointment's invoice was ever corrected, the newest
@@ -262,12 +270,17 @@ const getPatientInvoices = async (reqUser: any): Promise<Invoice[]> => {
 // reschedule, refund): this is for correcting a mistake in an otherwise-live invoice
 // with no other event to hang the void off of.
 const voidInvoice = async (reqUser: any, id: string, reason?: string): Promise<Invoice> => {
-    if (reqUser?.role !== 'admin') {
+    const isSuperAdmin = reqUser?.role === 'super_admin';
+    if (reqUser?.role !== 'admin' && !isSuperAdmin) {
         throw new ApiError(httpStatus.FORBIDDEN, 'Only an admin can void an invoice !!');
     }
     const invoice = await prisma.invoice.findUnique({ where: { id } });
     if (!invoice) {
         throw new ApiError(httpStatus.NOT_FOUND, 'Invoice is not found !!');
+    }
+    // Pass 29 — Multi-Tenant Clinics.
+    if (!isSuperAdmin && invoice.clinicId !== reqUser?.clinicId) {
+        throw new ApiError(httpStatus.FORBIDDEN, 'Only an admin can void an invoice !!');
     }
     assertValidInvoiceTransition(invoice.status, 'VOID', 'admin');
     const result = await prisma.$transaction(async (tx) => {
@@ -297,12 +310,17 @@ const voidInvoice = async (reqUser: any, id: string, reason?: string): Promise<I
 // simply: void the original (recording why), then issue a fresh one with the corrected
 // figures, linked back via supersedesId.
 const correctInvoice = async (reqUser: any, id: string, payload: { doctorFee?: number, bookingFee?: number, vat?: number, totalAmount?: number, reason?: string }): Promise<Invoice> => {
-    if (reqUser?.role !== 'admin') {
+    const isSuperAdmin = reqUser?.role === 'super_admin';
+    if (reqUser?.role !== 'admin' && !isSuperAdmin) {
         throw new ApiError(httpStatus.FORBIDDEN, 'Only an admin can correct an invoice !!');
     }
     const original = await prisma.invoice.findUnique({ where: { id } });
     if (!original) {
         throw new ApiError(httpStatus.NOT_FOUND, 'Invoice is not found !!');
+    }
+    // Pass 29 — Multi-Tenant Clinics.
+    if (!isSuperAdmin && original.clinicId !== reqUser?.clinicId) {
+        throw new ApiError(httpStatus.FORBIDDEN, 'Only an admin can correct an invoice !!');
     }
     assertValidInvoiceTransition(original.status, 'VOID', 'admin');
     const result = await prisma.$transaction(async (tx) => {
@@ -314,6 +332,9 @@ const correctInvoice = async (reqUser: any, id: string, payload: { doctorFee?: n
         const corrected = await tx.invoice.create({
             data: {
                 appointmentId: original.appointmentId,
+                // Pass 29 — Multi-Tenant Clinics. Same visit, same clinic — carried
+                // forward from the original, same as Prescription's correction path.
+                clinicId: original.clinicId,
                 paymentId: original.paymentId,
                 invoiceNumber,
                 status: 'ISSUED',

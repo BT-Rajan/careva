@@ -93,7 +93,7 @@ const getPrescriptionById = catchAsync(async (req: Request, res: Response) => {
 })
 
 const getAllPrescriptions = catchAsync(async (req: Request, res: Response) => {
-    const result = await PrescriptionService.getAllPrescriptions();
+    const result = await PrescriptionService.getAllPrescriptions(req.user);
     sendResponse(res, {
         statusCode: 200,
         message: 'Successfully Retrieve All Prescription !!',

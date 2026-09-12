@@ -8,8 +8,8 @@ const router = express.Router();
 // Pass 16 — Notifications. Admin-only: this is an operational/support view (delivery
 // tracking, manual retry), not something a patient or doctor needs a self-service view
 // into for their own notifications in this pass.
-router.get('/', auth(AuthUser.ADMIN), NotificationController.getNotifications);
-router.get('/:id', auth(AuthUser.ADMIN), NotificationController.getNotificationById);
-router.patch('/:id/retry', auth(AuthUser.ADMIN), NotificationController.retryNotification);
+router.get('/', auth(AuthUser.ADMIN, AuthUser.SUPER_ADMIN), NotificationController.getNotifications);
+router.get('/:id', auth(AuthUser.ADMIN, AuthUser.SUPER_ADMIN), NotificationController.getNotificationById);
+router.patch('/:id/retry', auth(AuthUser.ADMIN, AuthUser.SUPER_ADMIN), NotificationController.retryNotification);
 
 export const NotificationRouter = router;
