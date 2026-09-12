@@ -83,6 +83,11 @@ model Clinic {
   patients     Patient[]
   appointments Appointments[]
   timeSlots    DoctorTimeSlot[]
+  reviews      Reviews[]
+  invoices     Invoice[]
+  prescriptions Prescription[]
+  blogs        Blogs[]
+  notifications Notification[]
 
   @@map("Clinic")
 }
@@ -452,6 +457,14 @@ model Invoice {
   appointmentId String
   appointment   Appointments @relation(fields: [appointmentId], references: [id], onDelete: Restrict)
 
+  // Pass 29 — Multi-Tenant Clinics (remaining modules). Denormalized from
+  // appointment.clinicId at creation time (same pattern as Reviews) rather than joining
+  // through Appointment on every admin billing query — an invoice never moves clinics
+  // after the appointment it bills is created, so this is safe to copy once and never
+  // needs to be kept in sync afterward.
+  clinicId String
+  clinic   Clinic @relation(fields: [clinicId], references: [id])
+
   // 1:1-in-spirit with Payment, but NOT a DB-unique constraint on paymentId: a
   // corrected invoice (see supersedesId below) points at the SAME underlying payment as
   // the one it replaces — only the invoice document is versioned, not the money
@@ -504,6 +517,7 @@ model Invoice {
 
   @@index([status])
   @@index([paymentId])
+  @@index([clinicId])
   @@map("Invoice")
 }
 
@@ -521,6 +535,15 @@ model Reviews {
 
   patientId String
   patient   Patient @relation(fields: [patientId], references: [id], onDelete: Restrict)
+
+  // Pass 29 — Multi-Tenant Clinics (remaining modules). Deferred from Pass 27/28 — see
+  // docs/passes/28-multi-tenant-clinics-query-scoping.md. Sourced at creation time from
+  // the linked appointment's clinicId, or the reviewing patient's own clinicId when
+  // there's no appointment link — either way this is "which clinic was this visit at,"
+  // the same clinic the doctor was APPROVED at when the visit happened (a doctor
+  // affiliated with two clinics can be reviewed independently at each).
+  clinicId String
+  clinic   Clinic @relation(fields: [clinicId], references: [id])
 
   // Nullable: links a review back to the visit that justifies it (closes Gap G3 from
   // docs/passes/01-domain-state-model.md). Optional because existing reviews predate this
@@ -553,6 +576,7 @@ model Reviews {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@index([clinicId, status])
   @@index([status])
   @@map("Reviews")
 }
@@ -581,6 +605,11 @@ model Prescription {
 
   appointmentId String
   appointment   Appointments @relation(fields: [appointmentId], references: [id], onDelete: Restrict)
+
+  // Pass 29 — Multi-Tenant Clinics (remaining modules). Denormalized from
+  // appointment.clinicId at issuance time — same reasoning as Invoice.clinicId above.
+  clinicId String
+  clinic   Clinic @relation(fields: [clinicId], references: [id])
 
   followUpdate String?
   instruction  String?
@@ -622,6 +651,7 @@ model Prescription {
   deletedAt DateTime?
 
   @@index([status])
+  @@index([clinicId])
   @@map("Prescription")
 }
 
@@ -744,8 +774,15 @@ model Blogs {
   img         String?
   userId      String
   user        Doctor   @relation(fields: [userId], references: [id], onDelete: Restrict)
+  // Pass 29 — Multi-Tenant Clinics (remaining modules). Which clinic this doctor is
+  // posting as/for — required and validated against DoctorClinic affiliation at
+  // creation time (blog.service.ts), same pattern as DoctorTimeSlot.
+  clinicId    String
+  clinic      Clinic   @relation(fields: [clinicId], references: [id])
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+
+  @@index([clinicId])
 }
 
 // --- Pass 2 scaffolding tables -----------------------------------------------------
@@ -814,6 +851,14 @@ model Notification {
   recipientRole  String
   recipientEmail String
 
+  // Pass 29 — Multi-Tenant Clinics (remaining modules). Nullable, unlike every other
+  // clinicId added in this pass — a handful of notifications genuinely have no clinic
+  // context (e.g. a doctor's initial email-verification link, sent before they've
+  // joined any clinic). Populated at every dispatchNotification call site where a
+  // clinic context actually exists — see notification.service.ts's interface comment.
+  clinicId String?
+  clinic   Clinic? @relation(fields: [clinicId], references: [id])
+
   channel NotificationChannel @default(EMAIL)
 
   // A stable, greppable key like "appointment.scheduled" or "doctor.approval_status_changed"
@@ -845,6 +890,7 @@ model Notification {
   updatedAt DateTime @updatedAt
 
   @@index([recipientId, recipientRole])
+  @@index([clinicId, status])
   @@index([status])
   @@index([relatedEntityType, relatedEntityId])
   @@map("Notification")

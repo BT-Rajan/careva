@@ -43,11 +43,17 @@ const create = async (user: any, payload: Reviews): Promise<Reviews> => {
     // What IS enforced: if an appointmentId is supplied (by a future frontend, or a
     // direct API caller), it must actually belong to this patient and this doctor —
     // closing the spoofing gap without requiring a capability the app doesn't have yet.
+    // Pass 29 — Multi-Tenant Clinics (remaining modules). clinicId is now required on
+    // Reviews (schema.prisma) — derived from the linked appointment when present
+    // (that's the actual visit being reviewed), falling back to the patient's own
+    // clinic otherwise. Never trusted from the client.
+    payload.clinicId = isUserExist.clinicId;
     if (payload.appointmentId) {
         const appointment = await prisma.appointments.findUnique({ where: { id: payload.appointmentId } });
         if (!appointment || appointment.patientId !== isUserExist.id || appointment.doctorId !== isDoctorExist.id) {
             throw new ApiError(httpStatus.BAD_REQUEST, 'This appointment does not belong to you and this doctor !!');
         }
+        payload.clinicId = appointment.clinicId;
     }
     const result = await prisma.reviews.create({
         data: { ...payload, status: 'SUBMITTED' }
@@ -87,12 +93,17 @@ const getAllReviews = async (options: IOption): Promise<Reviews[] | null> => {
 // getAllDoctorsForAdmin/GET /admin/all: the public listing above filters to
 // PUBLISHED, this sees every status so an admin actually has something to moderate.
 const getAllReviewsForAdmin = async (reqUser: any, options: IOption): Promise<Reviews[] | null> => {
-    if (reqUser?.role !== 'admin') {
+    const isSuperAdmin = reqUser?.role === 'super_admin';
+    if (reqUser?.role !== 'admin' && !isSuperAdmin) {
         throw new ApiError(httpStatus.FORBIDDEN, 'Only an admin can view the review moderation queue !!');
     }
     const limit = Number(options.limit) || 50;
     const result = await prisma.reviews.findMany({
         take: limit,
+        // Pass 29 — Multi-Tenant Clinics. Same fix pattern as every other admin
+        // listing in Pass 28/29 — clinicId from the admin's own token, unfiltered
+        // only for super_admin.
+        where: isSuperAdmin ? undefined : { clinicId: reqUser?.clinicId },
         orderBy: { createdAt: 'desc' },
         include: {
             doctor: { select: { firstName: true, lastName: true, img: true } },
@@ -169,7 +180,18 @@ const getDoctorReviews = async (id: string): Promise<Reviews[] | null> => {
     return result;
 }
 
-const deleteReviews = async (id: string): Promise<Reviews> => {
+// Pass 29 — Multi-Tenant Clinics (remaining modules). Previously took no reqUser at
+// all — any admin could delete/edit any clinic's review, same leak shape fixed
+// throughout Pass 28.
+const deleteReviews = async (reqUser: any, id: string): Promise<Reviews> => {
+    const review = await prisma.reviews.findUnique({ where: { id } });
+    if (!review) {
+        throw new ApiError(httpStatus.NOT_FOUND, 'Review is not found !!');
+    }
+    const isSuperAdmin = reqUser?.role === 'super_admin';
+    if (!isSuperAdmin && review.clinicId !== reqUser?.clinicId) {
+        throw new ApiError(httpStatus.FORBIDDEN, 'You are not allowed to delete this review !!');
+    }
     const result = await prisma.reviews.delete({
         where: {
             id: id
@@ -178,7 +200,18 @@ const deleteReviews = async (id: string): Promise<Reviews> => {
     return result;
 }
 
-const updateReview = async (id: string, payload: Partial<Reviews>): Promise<Reviews> => {
+const updateReview = async (reqUser: any, id: string, payload: Partial<Reviews>): Promise<Reviews> => {
+    const review = await prisma.reviews.findUnique({ where: { id } });
+    if (!review) {
+        throw new ApiError(httpStatus.NOT_FOUND, 'Review is not found !!');
+    }
+    const isSuperAdmin = reqUser?.role === 'super_admin';
+    if (!isSuperAdmin && review.clinicId !== reqUser?.clinicId) {
+        throw new ApiError(httpStatus.FORBIDDEN, 'You are not allowed to update this review !!');
+    }
+    // clinicId is never client-settable through a generic update — same mass-assignment
+    // protection as Doctor/Patient's protected-fields lists.
+    delete (payload as any).clinicId;
     const result = await prisma.reviews.update({
         data: payload,
         where: {
@@ -222,12 +255,17 @@ const replyReviewByDoctor = async (user: any, id: string, payload: Partial<Revie
 // status, check the transition via review-lifecycle.ts, write, audit-log it. Modeled
 // as one parameterized function rather than four near-identical copies.
 const moderateReview = async (reqUser: any, id: string, requestedStatus: 'PUBLISHED' | 'FLAGGED' | 'REMOVED', reason?: string): Promise<Reviews> => {
-    if (reqUser?.role !== 'admin') {
+    const isSuperAdmin = reqUser?.role === 'super_admin';
+    if (reqUser?.role !== 'admin' && !isSuperAdmin) {
         throw new ApiError(httpStatus.FORBIDDEN, 'Only an admin can moderate reviews !!');
     }
     const review = await prisma.reviews.findUnique({ where: { id } });
     if (!review) {
         throw new ApiError(httpStatus.NOT_FOUND, 'Review is not found !!');
+    }
+    // Pass 29 — Multi-Tenant Clinics. Same fix pattern as everywhere else in Pass 28/29.
+    if (!isSuperAdmin && review.clinicId !== reqUser?.clinicId) {
+        throw new ApiError(httpStatus.FORBIDDEN, 'Only an admin can moderate reviews !!');
     }
     assertValidReviewTransition(review.status, requestedStatus, 'admin');
     const result = await prisma.$transaction(async (tx) => {

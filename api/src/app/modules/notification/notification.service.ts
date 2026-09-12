@@ -14,6 +14,13 @@ export interface DispatchNotificationInput {
     replacementObj: any;
     relatedEntityType?: string;
     relatedEntityId?: string;
+    // Pass 29 — Multi-Tenant Clinics (remaining modules). Optional — see the schema
+    // field's own comment for the (few) legitimately clinic-less cases. Every call site
+    // that has a clinic context available (a patient, an appointment, a DoctorClinic
+    // affiliation) should pass it; omitting it when one WAS available just means that
+    // notification won't show up in that clinic's admin view, not a security issue by
+    // itself, but worth fixing rather than leaving null out of laziness.
+    clinicId?: string | null;
 }
 
 /**
@@ -60,6 +67,7 @@ const dispatchNotification = async (input: DispatchNotificationInput): Promise<N
                 status: 'PENDING',
                 relatedEntityType: input.relatedEntityType,
                 relatedEntityId: input.relatedEntityId,
+                clinicId: input.clinicId ?? null,
             }
         });
         await attemptSend(notification.id, input.pathName, input.replacementObj, input.recipientEmail, input.subject);
@@ -94,12 +102,18 @@ const attemptSend = async (notificationId: string, pathName: string, replacement
  * needs to already support so that future automated retry has something to call.
  */
 const retryNotification = async (reqUser: any, id: string): Promise<Notification> => {
-    if (reqUser?.role !== 'admin') {
+    const isSuperAdmin = reqUser?.role === 'super_admin';
+    if (reqUser?.role !== 'admin' && !isSuperAdmin) {
         throw new ApiError(httpStatus.FORBIDDEN, 'Only an admin can retry a notification !!');
     }
     const notification = await prisma.notification.findUnique({ where: { id } });
     if (!notification) {
         throw new ApiError(httpStatus.NOT_FOUND, 'Notification is not found !!');
+    }
+    // Pass 29 — Multi-Tenant Clinics. Same clinic-ownership check as
+    // getNotificationById above.
+    if (!isSuperAdmin && notification.clinicId !== reqUser?.clinicId) {
+        throw new ApiError(httpStatus.FORBIDDEN, 'Only an admin can retry a notification !!');
     }
     if (notification.status === 'SENT') {
         throw new ApiError(httpStatus.CONFLICT, 'This notification was already sent !!');
@@ -133,12 +147,20 @@ const retryFailedNotificationsBatch = async (): Promise<{ retried: number; nowSe
     return { retried: candidates.length, nowSent };
 }
 
+// Pass 28/29 fix pattern — see docs/passes/28-multi-tenant-clinics-query-scoping.md.
+// clinicId comes from the admin's own token; super_admin gets no filter. A regular
+// admin will not see notifications with a null clinicId (call sites that haven't been
+// updated to pass one yet — see the interface comment) — that's a fail-closed gap, not
+// a leak: better to under-show a clinic admin than let them see another clinic's
+// notification content (which includes patient PII in templateData).
 const getNotifications = async (reqUser: any, filters: { status?: string, recipientId?: string }): Promise<Notification[]> => {
-    if (reqUser?.role !== 'admin') {
+    const isSuperAdmin = reqUser?.role === 'super_admin';
+    if (reqUser?.role !== 'admin' && !isSuperAdmin) {
         throw new ApiError(httpStatus.FORBIDDEN, 'Only an admin can view notifications !!');
     }
     return prisma.notification.findMany({
         where: {
+            ...(isSuperAdmin ? {} : { clinicId: reqUser?.clinicId }),
             ...(filters.status ? { status: filters.status as any } : {}),
             ...(filters.recipientId ? { recipientId: filters.recipientId } : {}),
         },
@@ -148,12 +170,16 @@ const getNotifications = async (reqUser: any, filters: { status?: string, recipi
 }
 
 const getNotificationById = async (reqUser: any, id: string): Promise<Notification> => {
-    if (reqUser?.role !== 'admin') {
+    const isSuperAdmin = reqUser?.role === 'super_admin';
+    if (reqUser?.role !== 'admin' && !isSuperAdmin) {
         throw new ApiError(httpStatus.FORBIDDEN, 'Only an admin can view notifications !!');
     }
     const notification = await prisma.notification.findUnique({ where: { id } });
     if (!notification) {
         throw new ApiError(httpStatus.NOT_FOUND, 'Notification is not found !!');
+    }
+    if (!isSuperAdmin && notification.clinicId !== reqUser?.clinicId) {
+        throw new ApiError(httpStatus.FORBIDDEN, 'Only an admin can view notifications !!');
     }
     return notification;
 }

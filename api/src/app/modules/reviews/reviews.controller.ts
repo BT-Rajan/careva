@@ -47,7 +47,7 @@ const getDoctorReviews = catchAsync(async (req: Request, res: Response) => {
 
 
 const deleteReview = catchAsync(async (req: Request, res: Response) => {
-    const result = await ReviewService.deleteReviews(req.params.id);
+    const result = await ReviewService.deleteReviews(req.user, req.params.id);
     sendResponse<Reviews>(res, {
         statusCode: 200,
         message: 'Successfully Deleted review !!',
@@ -57,7 +57,7 @@ const deleteReview = catchAsync(async (req: Request, res: Response) => {
 })
 
 const updateReview = catchAsync(async (req: Request, res: Response) => {
-    const result = await ReviewService.updateReview(req.params.id, req.body);
+    const result = await ReviewService.updateReview(req.user, req.params.id, req.body);
     sendResponse<Reviews>(res, {
         statusCode: 200,
         message: 'Successfully Updated review !!',

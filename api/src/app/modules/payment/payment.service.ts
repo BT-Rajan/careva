@@ -396,8 +396,21 @@ const processRefund = async (paymentId: string, amountMinor: number, reason?: st
 }
 
 const refundPayment = async (reqUser: any, paymentId: string, amountMinor: number, reason?: string, idempotencyKey?: string): Promise<Payment> => {
-    if (reqUser?.role !== 'admin') {
+    const isSuperAdmin = reqUser?.role === 'super_admin';
+    if (reqUser?.role !== 'admin' && !isSuperAdmin) {
         throw new ApiError(httpStatus.FORBIDDEN, 'Only an admin can issue a refund !!');
+    }
+    // Pass 29 — Multi-Tenant Clinics (remaining modules). Payment has no clinicId
+    // column of its own — scoped via its appointment relation instead of a schema
+    // change, same data either way.
+    if (!isSuperAdmin) {
+        const payment = await prisma.payment.findUnique({
+            where: { id: paymentId },
+            include: { appointment: { select: { clinicId: true } } }
+        });
+        if (!payment || payment.appointment?.clinicId !== reqUser?.clinicId) {
+            throw new ApiError(httpStatus.FORBIDDEN, 'Only an admin can issue a refund !!');
+        }
     }
     const claim = await claimIdempotencyKey(idempotencyKey);
     if (claim) {
@@ -422,11 +435,17 @@ const refundPayment = async (reqUser: any, paymentId: string, amountMinor: numbe
 // real automated reconciliation (polling the gateway's API to resolve these
 // automatically) is a larger feature this pass does not attempt.
 const getReconciliationQueue = async (reqUser: any): Promise<Payment[]> => {
-    if (reqUser?.role !== 'admin') {
+    const isSuperAdmin = reqUser?.role === 'super_admin';
+    if (reqUser?.role !== 'admin' && !isSuperAdmin) {
         throw new ApiError(httpStatus.FORBIDDEN, 'Only an admin can view the payment reconciliation queue !!');
     }
+    // Pass 29 — Multi-Tenant Clinics. Another completely unscoped admin listing before
+    // this fix — any admin saw every clinic's payments stuck in reconciliation.
     return prisma.payment.findMany({
-        where: { status: PaymentStatus.UNKNOWN_RECONCILING },
+        where: {
+            status: PaymentStatus.UNKNOWN_RECONCILING,
+            ...(isSuperAdmin ? {} : { appointment: { clinicId: reqUser?.clinicId } }),
+        },
         orderBy: { updatedAt: 'desc' },
         include: {
             appointment: {
@@ -439,7 +458,8 @@ const getReconciliationQueue = async (reqUser: any): Promise<Payment[]> => {
 const RESOLVABLE_STATUSES = [PaymentStatus.SUCCEEDED, PaymentStatus.FAILED, PaymentStatus.REFUNDED, PaymentStatus.PARTIALLY_REFUNDED] as const;
 
 const resolveReconciliation = async (reqUser: any, paymentId: string, resolvedStatus: PaymentStatus, note: string): Promise<Payment> => {
-    if (reqUser?.role !== 'admin') {
+    const isSuperAdmin = reqUser?.role === 'super_admin';
+    if (reqUser?.role !== 'admin' && !isSuperAdmin) {
         throw new ApiError(httpStatus.FORBIDDEN, 'Only an admin can resolve a reconciliation !!');
     }
     if (!RESOLVABLE_STATUSES.includes(resolvedStatus as any)) {
@@ -448,9 +468,16 @@ const resolveReconciliation = async (reqUser: any, paymentId: string, resolvedSt
     if (!note || !note.trim()) {
         throw new ApiError(httpStatus.BAD_REQUEST, 'A note explaining what was found at the gateway is required.');
     }
-    const payment = await prisma.payment.findUnique({ where: { id: paymentId } });
+    const payment = await prisma.payment.findUnique({
+        where: { id: paymentId },
+        include: { appointment: { select: { clinicId: true } } }
+    });
     if (!payment) {
         throw new ApiError(httpStatus.NOT_FOUND, 'Payment record is not found !!');
+    }
+    // Pass 29 — Multi-Tenant Clinics.
+    if (!isSuperAdmin && payment.appointment?.clinicId !== reqUser?.clinicId) {
+        throw new ApiError(httpStatus.FORBIDDEN, 'Only an admin can resolve a reconciliation !!');
     }
     if (payment.status !== PaymentStatus.UNKNOWN_RECONCILING) {
         throw new ApiError(httpStatus.CONFLICT, 'This payment is not awaiting reconciliation !!');
