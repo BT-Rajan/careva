@@ -36,6 +36,6 @@ at a time, in order. Each pass is committed and pushed on completion.
 | 28 | Multi-Tenant Clinics (query scoping — core booking flow) | ✅ Partial — see doc |
 | 29 | Multi-Tenant Clinics (remaining modules) | ✅ Backend done, frontend not started — see doc |
 | 30 | Multi-Tenant Clinics (frontend wiring) | ✅ Core flows wired — see doc |
-| 31 | Notification dispatch clinicId + Per-Clinic Email & Doctor Pages | ⏳ Not started |
+| 31 | Notification dispatch clinicId + Per-Clinic Email | ✅ Backend done, no settings UI yet — see doc |
 | 32 | Per-Clinic Image Hosting | ⏳ Not started |
-| 33 | Self-Serve Clinic Signup + multi-clinic picker UI | ⏳ Not started |
+| 33 | Self-Serve Clinic Signup + multi-clinic picker UI + email settings UI | ⏳ Not started |

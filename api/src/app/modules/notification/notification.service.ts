@@ -70,7 +70,7 @@ const dispatchNotification = async (input: DispatchNotificationInput): Promise<N
                 clinicId: input.clinicId ?? null,
             }
         });
-        await attemptSend(notification.id, input.pathName, input.replacementObj, input.recipientEmail, input.subject);
+        await attemptSend(notification.id, input.pathName, input.replacementObj, input.recipientEmail, input.subject, input.clinicId);
         // Re-read rather than trust the in-memory object: attemptSend just updated it.
         return await prisma.notification.findUnique({ where: { id: notification.id } });
     } catch (err) {
@@ -79,9 +79,18 @@ const dispatchNotification = async (input: DispatchNotificationInput): Promise<N
     }
 }
 
-const attemptSend = async (notificationId: string, pathName: string, replacementObj: any, toMail: string, subject: string): Promise<void> => {
+// Pass 31 — Multi-Tenant Clinics (per-clinic email). clinicId is optional (undefined
+// for the legitimately clinic-less cases — see DispatchNotificationInput's comment).
+// When present, looks up that clinic's OWN Gmail credentials and sends from them
+// instead of the platform default — see helpers/Transporter.ts's
+// getTransporterForClinic for the actual fallback behavior when a clinic hasn't
+// configured its own yet (every clinic today, until Pass 32's settings UI exists).
+const attemptSend = async (notificationId: string, pathName: string, replacementObj: any, toMail: string, subject: string, clinicId?: string | null): Promise<void> => {
     try {
-        await EmailtTransporter({ pathName, replacementObj, toMail, subject });
+        const clinic = clinicId
+            ? await prisma.clinic.findUnique({ where: { id: clinicId }, select: { gmailAppEmail: true, gmailAppPassEnc: true } })
+            : null;
+        await EmailtTransporter({ pathName, replacementObj, toMail, subject, clinic });
         await prisma.notification.update({
             where: { id: notificationId },
             data: { status: 'SENT', sentAt: new Date(), attempts: { increment: 1 }, lastError: null }
@@ -118,7 +127,7 @@ const retryNotification = async (reqUser: any, id: string): Promise<Notification
     if (notification.status === 'SENT') {
         throw new ApiError(httpStatus.CONFLICT, 'This notification was already sent !!');
     }
-    await attemptSend(id, notification.templatePath, notification.templateData, notification.recipientEmail, notification.subject);
+    await attemptSend(id, notification.templatePath, notification.templateData, notification.recipientEmail, notification.subject, notification.clinicId);
     return prisma.notification.findUniqueOrThrow({ where: { id } });
 }
 

@@ -16,7 +16,12 @@ import { assertValidDoctorApprovalTransition, getProfileCompleteness, DoctorActo
 import { NotificationService } from "../notification/notification.service";
 const { v4: uuidv4 } = require('uuid');
 
-const sendVerificationEmail = async (data: Doctor) => {
+// Pass 31 — Multi-Tenant Clinics (Notification dispatch). clinicId is optional here
+// (unlike everywhere else clinicId got added in this series) because doctor.service.ts
+// still has one caller — resetPassword-adjacent flows elsewhere, if any get added later
+// — that might not have one on hand. The real caller today (create, below) always
+// passes it.
+const sendVerificationEmail = async (data: Doctor, clinicId?: string | null) => {
     const currentUrl = process.env.NODE_ENV === 'production' ? config.backendLiveUrl : config.backendLocalUrl;
     const uniqueString = uuidv4() + data.id;
     const uniqueStringHashed = await bcrypt.hashSync(uniqueString, 12);
@@ -51,6 +56,8 @@ const sendVerificationEmail = async (data: Doctor) => {
             replacementObj: obj,
             relatedEntityType: 'Doctor',
             relatedEntityId: data.id,
+            // Pass 31 — Multi-Tenant Clinics (Notification dispatch).
+            clinicId,
         });
     }
 }
@@ -92,7 +99,9 @@ const create = async (payload: any): Promise<any> => {
     });
 
     if (data.id) {
-        await sendVerificationEmail(data)
+        // Pass 31 — Multi-Tenant Clinics (Notification dispatch). clinicId is in scope
+        // here from the destructure at the top of this function.
+        await sendVerificationEmail(data, clinicId)
     }
     return data;
 
@@ -463,6 +472,9 @@ const updateApprovalStatus = async (reqUser: any, doctorId: string, clinicId: st
             },
             relatedEntityType: 'Doctor',
             relatedEntityId: doctorId,
+            // Pass 31 — Multi-Tenant Clinics (Notification dispatch). clinicId is the
+            // affiliation's own clinic — already a required parameter of this function.
+            clinicId,
         }).catch((err) => console.error('Failed to dispatch doctor approval-status notification:', err));
     }
 

@@ -212,6 +212,10 @@ const resetPassword = async (payload: any): Promise<{ message: string }> => {
             replacementObj: { link: resetLink },
             relatedEntityType: 'Auth',
             relatedEntityId: isUserExist.id,
+            // Pass 31 — Multi-Tenant Clinics (Notification dispatch). Auth itself has
+            // carried clinicId since Pass 27/28 — no extra lookup needed here, unlike
+            // most of this pass's other call sites.
+            clinicId: isUserExist.clinicId,
         }).catch((err) => console.error('Failed to dispatch password-reset notification:', err));
     }
 

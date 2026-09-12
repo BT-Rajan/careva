@@ -425,6 +425,8 @@ const buildAppointmentCore = async (
                 replacementObj: appointmentObj,
                 relatedEntityType: 'Appointments',
                 relatedEntityId: appointment.id,
+                // Pass 31 — Multi-Tenant Clinics (Notification dispatch).
+                clinicId: appointment.clinicId,
             }).catch((err) => console.error('Failed to dispatch appointment confirmation notification (patient/guest):', err));
         }
         // See "3. Doctor notification" above — now fires for both booking paths.
@@ -439,6 +441,8 @@ const buildAppointmentCore = async (
                 replacementObj: appointmentObj,
                 relatedEntityType: 'Appointments',
                 relatedEntityId: appointment.id,
+                // Pass 31 — Multi-Tenant Clinics (Notification dispatch).
+                clinicId: appointment.clinicId,
             }).catch((err) => console.error('Failed to dispatch appointment confirmation notification (doctor):', err));
         }
 
@@ -676,6 +680,8 @@ const sendAppointmentStatusEmail = (appointment: any, subject: string, event: st
             replacementObj,
             relatedEntityType: 'Appointments',
             relatedEntityId: appointment.id,
+            // Pass 31 — Multi-Tenant Clinics (Notification dispatch).
+            clinicId: appointment.clinicId,
         }).catch((err) => console.error(`Failed to dispatch ${event} notification (patient):`, err));
     }
     if (appointment?.doctor?.email) {
@@ -689,6 +695,8 @@ const sendAppointmentStatusEmail = (appointment: any, subject: string, event: st
             replacementObj,
             relatedEntityType: 'Appointments',
             relatedEntityId: appointment.id,
+            // Pass 31 — Multi-Tenant Clinics (Notification dispatch).
+            clinicId: appointment.clinicId,
         }).catch((err) => console.error(`Failed to dispatch ${event} notification (doctor):`, err));
     }
 }
