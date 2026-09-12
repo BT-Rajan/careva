@@ -12,19 +12,19 @@ const router = express.Router();
 // at all — full patient PII was readable/deletable by anyone. GET / is real (used by the
 // admin dashboard); GET /:id and DELETE /:id are confirmed unused by the frontend today,
 // but were still live, reachable, unauthenticated endpoints.
-router.get('/', auth(AuthUser.ADMIN), PatientController.getAllPatients);
+router.get('/', auth(AuthUser.ADMIN, AuthUser.SUPER_ADMIN), PatientController.getAllPatients);
 router.post('/', validateRequest(PatientValidation.CreatePatientValidation), PatientController.createPatient);
 // Pass 24 — Data Privacy & Retention. Registered before /:id so "me" is never captured
 // as an id — self-service deletion, distinct from the admin-only DELETE /:id below (see
 // deleteMyAccount's own comment for why this is a genuinely different, stronger action
 // than an admin deactivation, not just the same thing with a different auth check).
 router.delete('/me', auth(AuthUser.PATIENT), validateRequest(PatientValidation.DeleteMyAccountValidation), PatientController.deleteMyAccount);
-router.get('/:id', auth(AuthUser.ADMIN, AuthUser.PATIENT), PatientController.getPatient);
-router.delete('/:id', auth(AuthUser.ADMIN), PatientController.deletePatient);
-router.patch('/:id/reactivate', auth(AuthUser.ADMIN), PatientController.reactivatePatient);
+router.get('/:id', auth(AuthUser.ADMIN, AuthUser.SUPER_ADMIN, AuthUser.PATIENT), PatientController.getPatient);
+router.delete('/:id', auth(AuthUser.ADMIN, AuthUser.SUPER_ADMIN), PatientController.deletePatient);
+router.patch('/:id/reactivate', auth(AuthUser.ADMIN, AuthUser.SUPER_ADMIN), PatientController.reactivatePatient);
 router.patch('/:id',
     CloudinaryHelper.upload.single('file'),
-    auth(AuthUser.PATIENT, AuthUser.ADMIN),
+    auth(AuthUser.PATIENT, AuthUser.ADMIN, AuthUser.SUPER_ADMIN),
     (req: Request, res: Response, next: NextFunction) => {
         return PatientController.updatePatient(req, res, next)
     }

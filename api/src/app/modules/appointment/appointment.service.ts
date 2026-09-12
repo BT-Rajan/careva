@@ -41,6 +41,7 @@ import { NotificationService } from "../notification/notification.service";
 const assertSlotAvailable = async (
     tx: Prisma.TransactionClient,
     doctorId: string,
+    clinicId: string,
     scheduleDate: string | undefined,
     scheduleTime: string | undefined
 ): Promise<void> => {
@@ -57,6 +58,11 @@ const assertSlotAvailable = async (
     // day, and DoctorBlockedDate.date is always stored normalized (see
     // doctorTimeSlot.service.ts's createBlockedDate) — exact-string matching the raw
     // scheduleDate against it would silently never match.
+    //
+    // Pass 28 — Multi-Tenant Clinics (query scoping). DoctorBlockedDate deliberately did
+    // NOT get a clinicId in Pass 27 — a doctor on leave is treated as unavailable
+    // everywhere they're affiliated, not just at one clinic. If per-clinic leave is ever
+    // needed, this table would need the same clinicId treatment DoctorTimeSlot got.
     const normalizedDate = moment(scheduleDate).format('YYYY-MM-DD');
     const blockedDate = await tx.doctorBlockedDate.findUnique({
         where: { doctorId_date: { doctorId, date: normalizedDate } }
@@ -82,23 +88,31 @@ const assertSlotAvailable = async (
     // not a MySQL named lock (GET_LOCK), so there's no manual-release/leak risk across
     // Prisma's pooled connections.
     //
-    // Tradeoff: this lock is per doctor+weekday, not per exact date+time slot, so it
-    // serializes ALL of a doctor's bookings for that weekday (every time range that
-    // weekday), not just concurrent attempts on the identical time slot. For this
-    // app's clinic-booking volume that's an acceptable cost for a simple, verifiably
-    // correct fix. If a specific doctor's booking throughput ever becomes a bottleneck,
-    // the finer-grained version would lock a per-date+time row instead — that needs a
-    // real row to exist to lock (e.g. a lazily-created per-slot ledger row), which is a
-    // bigger schema change and not needed unless contention is actually observed.
+    // Tradeoff: this lock is per doctor+clinic+weekday, not per exact date+time slot, so
+    // it serializes ALL of a doctor's bookings at THIS CLINIC for that weekday, not just
+    // concurrent attempts on the identical time slot. For this app's clinic-booking
+    // volume that's an acceptable cost for a simple, verifiably correct fix. If a
+    // specific doctor's booking throughput ever becomes a bottleneck, the finer-grained
+    // version would lock a per-date+time row instead — that needs a real row to exist to
+    // lock (e.g. a lazily-created per-slot ledger row), which is a bigger schema change
+    // and not needed unless contention is actually observed.
+    //
+    // Pass 28 — Multi-Tenant Clinics (query scoping). clinicId added to the lock and to
+    // every query below — DoctorTimeSlot's uniqueness is now (doctorId, clinicId, day),
+    // since a doctor can have independent schedules at different clinics (Pass 27). Not
+    // scoping this lock/lookup by clinicId would mean checking Clinic A's Monday
+    // capacity against a booking actually being made at Clinic B, or throwing "not
+    // available" for a doctor who IS available at the requested clinic but just doesn't
+    // have a DoctorTimeSlot row at some other clinic that happens to match first.
     const lockedRows = await tx.$queryRaw<{ id: string }[]>`
-        SELECT id FROM DoctorTimeSlot WHERE doctorId = ${doctorId} AND day = ${weekday} LIMIT 1 FOR UPDATE
+        SELECT id FROM DoctorTimeSlot WHERE doctorId = ${doctorId} AND clinicId = ${clinicId} AND day = ${weekday} LIMIT 1 FOR UPDATE
     `;
     if (lockedRows.length === 0) {
         throw new ApiError(httpStatus.BAD_REQUEST, "Doctor is not available on the selected day !!");
     }
 
     const doctorTimeSlot = await tx.doctorTimeSlot.findFirst({
-        where: { doctorId, day: weekday as any },
+        where: { doctorId, clinicId, day: weekday as any },
         include: { timeSlot: true }
     });
     if (!doctorTimeSlot) {
@@ -123,6 +137,7 @@ const assertSlotAvailable = async (
     const existingCount = await tx.appointments.count({
         where: {
             doctorId,
+            clinicId,
             scheduleDate,
             scheduleTime,
             // Pass 8: was `status: { not: 'cancel' }` — the old single lowercase string.
@@ -261,11 +276,29 @@ const buildAppointmentCore = async (
         });
         if (!isUserExist) {
             patientInfo['patientId'] = null;
+        } else {
+            // Pass 28 — Multi-Tenant Clinics (query scoping). A patient can only ever
+            // book within their own clinic (Patient.clinicId, Pass 27) — an
+            // authenticated patient's own record is what clinicId is trusted from, not
+            // whatever the client sent in the payload, so patientInfo.clinicId is
+            // overwritten here rather than merely validated.
+            patientInfo['clinicId'] = isUserExist.clinicId;
         }
     }
 
     const requestedDoctorId = patientInfo.doctorId || config.defaultAdminDoctor;
     patientInfo['doctorId'] = requestedDoctorId;
+
+    // Pass 28 — Multi-Tenant Clinics (query scoping). Guest bookings (no patientId, or
+    // an authenticated request without one) must say which clinic they're booking the
+    // doctor at, now that one doctor can be affiliated with several — the individual
+    // doctor page is expected to carry its clinic context and put it here. Validated
+    // for real below via the DoctorClinic lookup (existence + APPROVED), not just
+    // trusted because it's present.
+    if (!patientInfo.clinicId) {
+        throw new ApiError(httpStatus.BAD_REQUEST, 'clinicId is required !!');
+    }
+    const requestedClinicId: string = patientInfo.clinicId;
 
     const result = await runBookingTransaction(async (tx) => {
         // Pass 6: if this exact booking attempt already succeeded (same Idempotency-Key),
@@ -279,8 +312,17 @@ const buildAppointmentCore = async (
         }
         // Pass 10 — Doctor Lifecycle: a doctor must be Approved/Active to be bookable
         // (Pass 1's invariant #6), enforced for both authenticated and guest bookings.
-        if (doctor.approvalStatus !== 'APPROVED') {
-            throw new ApiError(httpStatus.CONFLICT, 'This doctor is not currently accepting bookings !!');
+        // Pass 28 — Multi-Tenant Clinics. This USED to check a single global
+        // Doctor.approvalStatus. Approval is now per (doctor, clinic) affiliation
+        // (Pass 27) — a doctor APPROVED at Clinic A but SUSPENDED at Clinic B must
+        // still be unbookable at Clinic B specifically, even though they're fine
+        // elsewhere, so this checks the DoctorClinic row for the REQUESTED clinic, not
+        // the doctor in the abstract.
+        const affiliation = await tx.doctorClinic.findUnique({
+            where: { doctorId_clinicId: { doctorId: requestedDoctorId, clinicId: requestedClinicId } },
+        });
+        if (!affiliation || affiliation.approvalStatus !== 'APPROVED') {
+            throw new ApiError(httpStatus.CONFLICT, 'This doctor is not currently accepting bookings at this clinic !!');
         }
 
         // Pass 15 — Tracking & Public Access: a random token, not a guessable
@@ -291,7 +333,7 @@ const buildAppointmentCore = async (
         // Pass 5 — the single most important check in the whole booking flow — must run
         // inside the same transaction as the insert below. See assertSlotAvailable above,
         // including the MariaDB row-lock mitigation for the simultaneous-booking race.
-        await assertSlotAvailable(tx, requestedDoctorId, patientInfo.scheduleDate, patientInfo.scheduleTime);
+        await assertSlotAvailable(tx, requestedDoctorId, requestedClinicId, patientInfo.scheduleDate, patientInfo.scheduleTime);
 
         const appointment = await tx.appointments.create({
             data: patientInfo,
@@ -436,8 +478,16 @@ const createAppointment = (payload: any, idempotencyKey?: string): Promise<Appoi
 const createAppointmentByUnAuthenticateUser = (payload: any, idempotencyKey?: string): Promise<any> =>
     buildAppointmentCore(payload, idempotencyKey, false);
 
-const getAllAppointments = async (): Promise<Appointments[] | null> => {
-    const result = await prisma.appointments.findMany();
+// Pass 28 — Multi-Tenant Clinics (query scoping). Pass 4 restricted this to
+// authenticated admins but added NO clinic filter — every admin, from any clinic, could
+// see every appointment on the entire platform. This is the single most severe
+// unscoped query found in this pass. clinicId comes from the caller (controller,
+// sourced from the admin's own token) — undefined only for super_admin, the one role
+// designed to see across every clinic.
+const getAllAppointments = async (clinicId?: string): Promise<Appointments[] | null> => {
+    const result = await prisma.appointments.findMany({
+        where: clinicId ? { clinicId } : undefined,
+    });
     return result;
 }
 
@@ -465,9 +515,12 @@ const getAppointment = async (reqUser: any, id: string): Promise<Appointments | 
     if (!result) {
         return null;
     }
-    const isAdmin = reqUser?.role === 'admin';
+    // Pass 28 — Multi-Tenant Clinics (query scoping). Same pattern throughout this
+    // pass — 'admin' is scoped to their own clinic, super_admin is not.
+    const isSuperAdmin = reqUser?.role === 'super_admin';
+    const isAdmin = reqUser?.role === 'admin' && result.clinicId === reqUser?.clinicId;
     const isOwner = result.patientId === reqUser?.userId || result.doctorId === reqUser?.userId;
-    if (!isAdmin && !isOwner) {
+    if (!isSuperAdmin && !isAdmin && !isOwner) {
         throw new ApiError(httpStatus.FORBIDDEN, 'You are not allowed to view this appointment !!');
     }
     return result;
@@ -555,7 +608,20 @@ const getPatientAppointmentById = async (user: any): Promise<Appointments[] | nu
 // Superseded by api/src/app/modules/invoice/invoice.service.ts's
 // getInvoiceByAppointmentId / getPatientInvoices / getDoctorInvoices.
 
-const deleteAppointment = async (id: string): Promise<any> => {
+// Pass 28 — Multi-Tenant Clinics (query scoping). This took no reqUser at all — the
+// route restricts it to 'admin' (Pass 4), but ANY admin could hard-delete ANY clinic's
+// appointment by id, no ownership check whatsoever. Same fix shape as everywhere else
+// in this pass; super_admin remains unrestricted.
+const deleteAppointment = async (reqUser: any, id: string): Promise<any> => {
+    const appointment = await prisma.appointments.findUnique({ where: { id } });
+    if (!appointment) {
+        throw new ApiError(httpStatus.NOT_FOUND, 'Appointment is not found !!');
+    }
+    const isSuperAdmin = reqUser?.role === 'super_admin';
+    const isAdmin = reqUser?.role === 'admin' && appointment.clinicId === reqUser?.clinicId;
+    if (!isSuperAdmin && !isAdmin) {
+        throw new ApiError(httpStatus.FORBIDDEN, 'You are not allowed to delete this appointment !!');
+    }
     const result = await prisma.appointments.delete({
         where: {
             id: id
@@ -648,9 +714,13 @@ const cancelAppointment = async (reqUser: any, id: string, reason?: string): Pro
     if (!appointment) {
         throw new ApiError(httpStatus.NOT_FOUND, 'Appointment is not found !!');
     }
-    const isAdmin = reqUser?.role === 'admin';
+    // Pass 28 — Multi-Tenant Clinics (query scoping). Same pattern as
+    // rescheduleAppointment above — an 'admin' may only cancel an appointment at their
+    // own clinic. super_admin is unrestricted.
+    const isSuperAdmin = reqUser?.role === 'super_admin';
+    const isAdmin = reqUser?.role === 'admin' && appointment.clinicId === reqUser?.clinicId;
     const isOwner = appointment.patientId === reqUser?.userId || appointment.doctorId === reqUser?.userId;
-    if (!isAdmin && !isOwner) {
+    if (!isSuperAdmin && !isAdmin && !isOwner) {
         throw new ApiError(httpStatus.FORBIDDEN, 'You are not allowed to cancel this appointment !!');
     }
 
@@ -751,9 +821,14 @@ const rescheduleAppointment = async (reqUser: any, id: string, newScheduleDate: 
     if (!appointment) {
         throw new ApiError(httpStatus.NOT_FOUND, 'Appointment is not found !!');
     }
-    const isAdmin = reqUser?.role === 'admin';
+    // Pass 28 — Multi-Tenant Clinics (query scoping). An 'admin' may only act on an
+    // appointment belonging to their own clinic — otherwise Clinic A's admin could
+    // reschedule Clinic B's appointment by id, same shape of leak as every other
+    // unscoped admin action fixed in this pass. super_admin has no clinic restriction.
+    const isSuperAdmin = reqUser?.role === 'super_admin';
+    const isAdmin = reqUser?.role === 'admin' && appointment.clinicId === reqUser?.clinicId;
     const isOwner = appointment.patientId === reqUser?.userId || appointment.doctorId === reqUser?.userId;
-    if (!isAdmin && !isOwner) {
+    if (!isSuperAdmin && !isAdmin && !isOwner) {
         throw new ApiError(httpStatus.FORBIDDEN, 'You are not allowed to reschedule this appointment !!');
     }
     if (!newScheduleDate || !newScheduleTime) {
@@ -781,7 +856,7 @@ const rescheduleAppointment = async (reqUser: any, id: string, newScheduleDate: 
         // protection against a race for the NEW slot — "rescheduling conflicts" is the
         // same problem booking-time slot conflicts are, just against a different current
         // row instead of a fresh insert.
-        await assertSlotAvailable(tx, appointment.doctorId as string, newScheduleDate, newScheduleTime);
+        await assertSlotAvailable(tx, appointment.doctorId as string, appointment.clinicId, newScheduleDate, newScheduleTime);
 
         const updated = await tx.appointments.update({
             where: { id },
@@ -843,9 +918,12 @@ const updateAppointment = async (reqUser: any, id: string, payload: Partial<Appo
     if (!appointment) {
         throw new ApiError(httpStatus.NOT_FOUND, 'Appointment is not found !!');
     }
-    const isAdmin = reqUser?.role === 'admin';
+    // Pass 28 — Multi-Tenant Clinics (query scoping). Same pattern throughout this
+    // pass — 'admin' is scoped to their own clinic, super_admin is not.
+    const isSuperAdmin = reqUser?.role === 'super_admin';
+    const isAdmin = reqUser?.role === 'admin' && appointment.clinicId === reqUser?.clinicId;
     const isOwner = appointment.patientId === reqUser?.userId || appointment.doctorId === reqUser?.userId;
-    if (!isAdmin && !isOwner) {
+    if (!isSuperAdmin && !isAdmin && !isOwner) {
         throw new ApiError(httpStatus.FORBIDDEN, 'You are not allowed to update this appointment !!');
     }
     if (!payload.status) {

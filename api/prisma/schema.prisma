@@ -25,7 +25,7 @@ model Auth {
   isDemo   Boolean  @default(false)
 
   /// Pass 27 — Multi-Tenant Clinics. Set for `admin` (the one clinic they administer).
-  /// Null for `superadmin` (platform operator, deliberately unscoped — see docs/passes/
+  /// Null for `super_admin` (platform operator, deliberately unscoped — see docs/passes/
   /// 27-multi-tenant-clinics.md) and for `doctor`/`patient`, whose own clinic scoping
   /// lives on DoctorClinic/Patient respectively, not here — a doctor can be affiliated
   /// with more than one clinic, so a single clinicId on their Auth row would be wrong.
@@ -864,7 +864,7 @@ enum UserRole {
   // Pass 27 — Multi-Tenant Clinics. Platform operator — deliberately the one role with
   // no clinicId, so support/ops can query across clinics. `admin` below now means
   // "clinic admin," scoped to exactly one clinic via Auth.clinicId.
-  superadmin
+  super_admin
   admin
   patient
   doctor

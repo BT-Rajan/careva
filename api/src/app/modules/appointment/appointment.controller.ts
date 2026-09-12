@@ -30,7 +30,11 @@ const createAppointmentByUnAuthenticateUser = catchAsync(async (req: Request, re
 
 
 const getAllAppointment = catchAsync(async (req: Request, res: Response) => {
-    const result = await AppointmentService.getAllAppointments();
+    // Pass 28 — Multi-Tenant Clinics (query scoping). Same fix pattern as
+    // doctor.controller.ts's getAllDoctorsForAdmin: clinicId comes from the admin's own
+    // verified token, never from the client-controlled query string.
+    const clinicId = req.user?.role === 'super_admin' ? undefined : (req.user as any)?.clinicId;
+    const result = await AppointmentService.getAllAppointments(clinicId);
     sendResponse<Appointments[]>(res, {
         statusCode: 200,
         message: 'Successfully Retrieve All Appointment !!',
@@ -60,7 +64,7 @@ const getAppointmentByTrackingId = catchAsync(async (req: Request, res: Response
 })
 
 const deleteAppointment = catchAsync(async (req: Request, res: Response) => {
-    const result = await AppointmentService.deleteAppointment(req.params.id);
+    const result = await AppointmentService.deleteAppointment(req.user, req.params.id);
     sendResponse<Appointments>(res, {
         statusCode: 200,
         message: 'Successfully Deleted Appointment !!',

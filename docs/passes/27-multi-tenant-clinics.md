@@ -54,7 +54,7 @@ not just `Appointments`.
 
 | Role | `clinicId` on token | Scoping |
 |---|---|---|
-| `superadmin` | none | Deliberately unscoped — platform ops/support only |
+| `super_admin` | none | Deliberately unscoped — platform ops/support only |
 | `admin` | required, one clinic | Every query WHERE `clinicId = token.clinicId` |
 | `doctor` | none | Global by design — a doctor's own "my appointments" view is legitimately cross-clinic (it's their whole practice). The boundary is enforced on the *admin* side: an admin can never query a resource whose `clinicId` isn't theirs, regardless of which doctor it belongs to. |
 | `patient` | required, one clinic | Same as admin — patients don't cross clinics |
@@ -73,7 +73,7 @@ not just `Appointments`.
   decrypts, or reads them yet — that's the per-clinic email/image work (Pass 29+).
 - **No self-serve clinic signup flow.** The `Clinic` table exists; nothing creates a
   row in it yet outside the migration's one legacy-clinic backfill.
-- **No superadmin UI or route protection.** The role exists in the enum; no middleware
+- **No super_admin UI or route protection.** The role exists in the enum; no middleware
   or dashboard uses it yet.
 
 ## Migration
@@ -86,12 +86,20 @@ SQL against a staging copy before production; MariaDB DDL is not fully transacti
 
 ## Next passes
 
-- **Pass 28** — scope every list/search/admin query across all modules by `clinicId`
-  (the bulk of the remaining work — this is what actually closes the data-leak risk).
-- **Pass 29** — per-clinic Gmail sending (credential encryption + notification.service.ts
+Updated after Pass 28 actually ran (see docs/passes/28-multi-tenant-clinics-query-scoping.md):
+
+- **Pass 28** (done, partial) — scoped auth/doctor/patient/appointment/doctorTimeSlot —
+  the core booking flow and the two worst leaks (fully unscoped admin listing +
+  deletion in appointments).
+- **Pass 29** — the same query-scoping work for Reviews, Blogs, Prescription, Invoice,
+  Medicines, Favourites, Notification, plus all frontend wiring (several call sites now
+  need `clinicId` added to their requests, and Doctors.jsx's admin table needs updating
+  for approvalStatus's new location on the `clinics` relation instead of directly on
+  Doctor).
+- **Pass 30** — per-clinic Gmail sending (credential encryption + notification.service.ts
   swapped from global `.env` to per-clinic lookup, with the global env as fallback for
   clinics that haven't configured their own).
   Doctor public page slugs/routing.
-- **Pass 30** — per-clinic image hosting (same credential pattern, generalized upload
+- **Pass 31** — per-clinic image hosting (same credential pattern, generalized upload
   utility).
-- **Pass 31** — self-serve "create your clinic" signup flow.
+- **Pass 32** — self-serve "create your clinic" signup flow.

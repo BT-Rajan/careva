@@ -59,7 +59,7 @@ ALTER TABLE `Appointments` ADD COLUMN `clinicId` VARCHAR(191) NULL;
 ALTER TABLE `DoctorTimeSlot` ADD COLUMN `clinicId` VARCHAR(191) NULL;
 
 -- Additive enum value — existing 'admin' rows are unaffected.
-ALTER TABLE `Auth` MODIFY COLUMN `role` ENUM('superadmin','admin','patient','doctor') NOT NULL;
+ALTER TABLE `Auth` MODIFY COLUMN `role` ENUM('super_admin','admin','patient','doctor') NOT NULL;
 
 -- ============================================================================
 -- STEP 3 — Backfill: everything that exists today came from one real business.
