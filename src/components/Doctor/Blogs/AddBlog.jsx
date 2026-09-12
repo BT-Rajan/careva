@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { useCreateBlogMutation } from '../../../redux/api/blogApi';
+import { useGetDoctorQuery } from '../../../redux/api/doctorApi';
 import { useForm } from 'react-hook-form';
 import { useNavigate } from 'react-router-dom';
 import { Button, message } from 'antd';
@@ -11,6 +12,13 @@ import BlogIcon from '../../../images/blogIcon.png';
 const AddBlog = () => {
     const { data: userData } = useAuthCheck();
     const [createBlog, { isLoading, isError, error, isSuccess }] = useCreateBlogMutation();
+    // Pass 30 — Multi-Tenant Clinics (frontend wiring). Required by the API since this
+    // pass (blog.service.ts) — which clinic this doctor is posting as/for, validated
+    // server-side against their actual DoctorClinic affiliation. Same known limitation
+    // as the booking flow: picks the doctor's first APPROVED clinic, no picker yet for
+    // a genuinely multi-clinic doctor.
+    const { data: doctorData } = useGetDoctorQuery(userData?.id, { skip: !userData?.id });
+    const clinicId = doctorData?.clinics?.[0]?.clinicId;
     const { register, handleSubmit } = useForm({});
     const [selectedImage, setSelectedImage] = useState(null);
     const [file, setFile] = useState(null);
@@ -20,6 +28,7 @@ const AddBlog = () => {
         if (userData && selectedImage) {
             const formData = new FormData();
             data['userId'] = userData.id;
+            data['clinicId'] = clinicId;
             const blogData = JSON.stringify(data);
             formData.append('file', file);
             formData.append('data', blogData)

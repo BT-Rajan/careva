@@ -54,7 +54,12 @@ const DoctorBooking = () => {
     const { doctorId } = useParams();
     const navigation = useNavigate();
     const { data, isLoading, isError, error } = useGetDoctorQuery(doctorId);
-    const { data: time, refetch, isLoading: dIsLoading, isError: dIsError, error: dError } = useGetAppointmentTimeQuery({ day: selectDay, id: doctorId });
+    // Pass 30 — Multi-Tenant Clinics (frontend wiring). Same known limitation as
+    // AppointmentPage.jsx/SelectApppointment.jsx — picks the doctor's first APPROVED
+    // clinic affiliation (getDoctor now includes it), no picker yet for a genuinely
+    // multi-clinic doctor.
+    const clinicId = data?.clinics?.[0]?.clinicId;
+    const { data: time, refetch, isLoading: dIsLoading, isError: dIsError, error: dError } = useGetAppointmentTimeQuery({ day: selectDay, id: doctorId, clinicId }, { skip: !clinicId });
 
     const [selectValue, setSelectValue] = useState(initialValue);
     const [IsdDisable, setIsDisable] = useState(true);
@@ -159,6 +164,9 @@ const DoctorBooking = () => {
             scheduleDate: selectedDate,
             scheduleTime: selectTime,
             doctorId: doctorId,
+            // Pass 30 — Multi-Tenant Clinics (frontend wiring). Required by the API
+            // since Pass 28 (appointment.validation.ts).
+            clinicId,
             patientId: role !== '' && role === 'patient' ? patientId : undefined,
             // BUG FIX: this flow never sent reasonForVisit at all (the field is optional
             // server-side, so bookings didn't fail — they just reached the doctor with no

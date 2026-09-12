@@ -16,6 +16,7 @@ import { PaymentRouter } from '../modules/payment/payment.route';
 import { InvoiceRouter } from '../modules/invoice/invoice.route';
 import { NotificationRouter } from '../modules/notification/notification.route';
 import { AuditLogRouter } from '../modules/audit-log/audit-log.route';
+import { ClinicRouter } from '../modules/clinic/clinic.route';
 
 const router = express.Router();
 
@@ -81,6 +82,10 @@ const moduleRoutes = [
     {
         path: '/audit-log',
         route: AuditLogRouter
+    },
+    {
+        path: '/clinic',
+        route: ClinicRouter
     }
 ]
 moduleRoutes.forEach((route) => router.use(route.path, route.route));

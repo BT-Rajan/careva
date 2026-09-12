@@ -4,6 +4,7 @@ import SocialSignUp from './SocialSignUp';
 import Spinner from 'react-bootstrap/Spinner'
 import swal from 'sweetalert';
 import { useDoctorSignUpMutation, usePatientSignUpMutation } from '../../redux/api/authApi';
+import { useGetAllClinicsQuery } from '../../redux/api/clinicApi';
 import { message } from 'antd';
 
 // password regex
@@ -23,9 +24,15 @@ const SignUp = ({ setSignUp }) => {
         lastName: '',
         email: '',
         password: '',
+        // Pass 30 — Multi-Tenant Clinics (frontend wiring). Required by the API for
+        // both doctor and patient signup since Pass 28/29 — see
+        // doctor.validation.ts / patient.validation.ts.
+        clinicId: '',
     }
     const [user, setUser] = useState(formField)
     const [userType, setUserType] = useState('patient');
+    const { data: clinicsData, isLoading: clinicsLoading } = useGetAllClinicsQuery();
+    const clinics = clinicsData?.data ?? [];
     const [doctorSignUp, { data: dData, isSuccess: dIsSuccess, isError: dIsError, error: dError, isLoading: dIsLoading }] = useDoctorSignUpMutation();
     const [patientSignUp, { data: pData, isSuccess: pIsSuccess, isError: pIsError, error: pError, isLoading: pIsLoading }] = usePatientSignUpMutation();
     const [passwordValidation, setPasswordValidation] = useState({
@@ -122,6 +129,9 @@ const SignUp = ({ setSignUp }) => {
     const handleUserTypeChange = (e) => {
         setUserType(e.target.value);
     }
+    const handleClinicChange = (e) => {
+        setUser({ ...user, clinicId: e.target.value });
+    }
     const hanldeOnSubmit = async (e) => {
         e.preventDefault();
         setLoading(true);
@@ -169,12 +179,32 @@ const SignUp = ({ setSignUp }) => {
                     <option value="doctor">Doctor</option>
                 </select>
             </div>
+            {/* Pass 30 — Multi-Tenant Clinics (frontend wiring). Which clinic this
+                account is joining — required by the API for both roles (see
+                formField's clinicId comment above). */}
+            <div className='input-field d-flex align-items-center gap-2 justify-content-center'>
+                <div className='text-nowrap'>CLINIC</div>
+                <select
+                    className="form-select w-50"
+                    aria-label="select clinic"
+                    onChange={(e) => handleClinicChange(e)}
+                    value={user.clinicId}
+                    disabled={clinicsLoading}
+                >
+                    <option value="" disabled>
+                        {clinicsLoading ? 'Loading clinics…' : 'Select a clinic'}
+                    </option>
+                    {clinics.map((clinic) => (
+                        <option key={clinic.id} value={clinic.id}>{clinic.name}</option>
+                    ))}
+                </select>
+            </div>
             {error.length && <h6 className="text-danger text-center">{error}</h6>}
             {infoError && <h6 className="text-danger text-center">{infoError}</h6>}
             <button type="submit"
                 className="btn btn-primary btn-block mt-2 iBtn"
                 disabled={
-                    passwordValidation.carLength && passwordValidation.numeric && passwordValidation.upperLowerCase && passwordValidation.specailChar && emailError.emailError ? "" : true
+                    passwordValidation.carLength && passwordValidation.numeric && passwordValidation.upperLowerCase && passwordValidation.specailChar && emailError.emailError && user.clinicId ? "" : true
                 }
             >
                 {loading ? <Spinner animation="border" variant="info" /> : "Sign Up"}

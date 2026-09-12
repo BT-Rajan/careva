@@ -191,7 +191,12 @@ const Doctors = () => {
                     SUSPENDED: 'volcano',
                     DEACTIVATED: 'default',
                 };
-                const status = record.approvalStatus || 'PENDING_APPROVAL';
+                // Pass 30 — Multi-Tenant Clinics (frontend wiring). approvalStatus moved
+                // off Doctor onto the per-clinic DoctorClinic affiliation (Pass 27) —
+                // the admin listing query now includes that relation scoped to the
+                // viewing admin's own clinic (doctor.service.ts's getAllDoctors), so
+                // there's at most one entry here to read from.
+                const status = record.clinics?.[0]?.approvalStatus || 'PENDING_APPROVAL';
                 return (
                     <Space direction="vertical" size="small">
                         <Tag color={colors[status] || 'default'}>{status.replace(/_/g, ' ')}</Tag>

@@ -98,6 +98,15 @@ const AppointmentPage = () => {
       description: selectValue.description || undefined,
       address: selectValue.address || undefined,
       ...(selectedDoctor?.id && { doctorId: selectedDoctor.id }),
+      // Pass 30 — Multi-Tenant Clinics (frontend wiring). Required by the API since
+      // Pass 28 (appointment.validation.ts) — which clinic this doctor is being
+      // booked at. KNOWN LIMITATION: this always books at the doctor's first APPROVED
+      // clinic affiliation (doctor.service.ts's getDoctor/getAllDoctors now include
+      // only APPROVED ones) — a doctor affiliated with more than one clinic has no way
+      // for the patient to choose which one here. Fine for the common case (most
+      // doctors have exactly one), a real gap for genuinely multi-clinic doctors. A
+      // proper fix needs a clinic-picker step in this flow, not just this line.
+      ...(selectedDoctor?.clinics?.[0]?.clinicId && { clinicId: selectedDoctor.clinics[0].clinicId }),
     };
     obj.payment = {
       paymentType: selectValue.paymentType,
